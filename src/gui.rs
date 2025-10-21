@@ -1,16 +1,14 @@
-use std::thread;
-
 use eframe::{
     egui::{self, Rect},
     epaint::CornerRadius,
 };
 
-use crate::emulator::{Emulator, SCREEN_HEIGHT, SCREEN_WIDTH, SharedOutputBuffer};
+use crate::emulator::{SCREEN_HEIGHT, SCREEN_WIDTH, SharedOutputBuffer};
 
 /// Size in pixels of a single gb pixel
 const PIXEL_SCALE: usize = 4;
 
-pub fn start_gui_app(mut emulator: Box<Emulator>) -> eframe::Result<()> {
+pub fn start_gui(output_buffer: SharedOutputBuffer) {
     eframe::run_native(
         "GBC Emulator",
         eframe::NativeOptions {
@@ -25,15 +23,12 @@ pub fn start_gui_app(mut emulator: Box<Emulator>) -> eframe::Result<()> {
             ..Default::default()
         },
         Box::new(|_| {
-            let output_buffer = emulator.clone_output_buffer();
-
-            thread::spawn(move || emulator.run());
-
             Ok(Box::new(GuiApp {
                 pixels: output_buffer,
             }))
         }),
     )
+    .unwrap()
 }
 
 struct GuiApp {

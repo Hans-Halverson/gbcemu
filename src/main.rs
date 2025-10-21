@@ -1,21 +1,16 @@
 use clap::Parser;
+use gbcemu::{
+    emulator::{Emulator, SharedOutputBuffer},
+    gui::start_gui,
+    options::{Args, Options},
+    rom::Rom,
+};
 
-use gbcemu::{emulator::Emulator, rom::Rom};
-
-#[derive(Parser)]
-#[command(about)]
-struct Args {
-    /// Print info about the ROM to stdout
-    #[arg(long, default_value_t = false)]
-    dump_rom: bool,
-
-    /// ROM file to run
-    #[arg(required = true)]
-    rom: String,
-}
+use std::sync::{Arc, mpsc::channel};
 
 fn main() {
     let args = Args::parse();
+    let options = Arc::new(Options::from_args(&args));
 
     let rom_bytes = read_file(&args.rom);
     let rom = Rom::new_from_bytes(rom_bytes);
@@ -25,11 +20,24 @@ fn main() {
         return;
     }
 
-    let emulator = Box::new(Emulator::new());
-
-    gbcemu::gui::start_gui_app(emulator).unwrap();
+    let shared_output_buffer = start_emulator_thread(options.clone());
+    start_gui(shared_output_buffer);
 }
 
 fn read_file(path: &str) -> Vec<u8> {
     std::fs::read(path).expect("Failed to read file")
+}
+
+/// Start the emulator in a separate thread and return a buffer where results can be written that
+/// can be shared across threads.
+fn start_emulator_thread(options: Arc<Options>) -> SharedOutputBuffer {
+    let (sender, receiver) = channel();
+
+    std::thread::spawn(move || {
+        let mut emulator = Box::new(Emulator::new(options));
+        sender.send(emulator.clone_output_buffer()).unwrap();
+        emulator.run();
+    });
+
+    receiver.recv().unwrap()
 }
