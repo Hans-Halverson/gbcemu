@@ -6,7 +6,10 @@ use gbcemu::{
     rom::Rom,
 };
 
-use std::sync::{Arc, mpsc::channel};
+use std::{
+    sync::{Arc, mpsc::channel},
+    thread::{self, JoinHandle},
+};
 
 fn main() {
     let args = Args::parse();
@@ -20,8 +23,13 @@ fn main() {
         return;
     }
 
-    let shared_output_buffer = start_emulator_thread(options.clone());
-    start_gui(shared_output_buffer);
+    let (emulator_thread, shared_output_buffer) = start_emulator_thread(options.clone());
+
+    if !args.headless {
+        start_gui(shared_output_buffer);
+    } else {
+        emulator_thread.join().unwrap();
+    }
 }
 
 fn read_file(path: &str) -> Vec<u8> {
@@ -30,14 +38,14 @@ fn read_file(path: &str) -> Vec<u8> {
 
 /// Start the emulator in a separate thread and return a buffer where results can be written that
 /// can be shared across threads.
-fn start_emulator_thread(options: Arc<Options>) -> SharedOutputBuffer {
+fn start_emulator_thread(options: Arc<Options>) -> (JoinHandle<()>, SharedOutputBuffer) {
     let (sender, receiver) = channel();
 
-    std::thread::spawn(move || {
+    let emulator_thread = thread::spawn(move || {
         let mut emulator = Box::new(Emulator::new(options));
         sender.send(emulator.clone_output_buffer()).unwrap();
         emulator.run();
     });
 
-    receiver.recv().unwrap()
+    (emulator_thread, receiver.recv().unwrap())
 }

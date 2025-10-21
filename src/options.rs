@@ -11,6 +11,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub log_frames: bool,
 
+    /// Run in headless mode (no GUI)
+    #[arg(long, default_value_t = false)]
+    pub headless: bool,
+
     /// ROM file to run
     #[arg(required = true)]
     pub rom: String,
