@@ -10,7 +10,12 @@ use std::{
 
 use eframe::egui::Color32;
 
-use crate::options::Options;
+use crate::{
+    address_space::{Address, EXTERNAL_RAM_END, ROM_END, VRAM_END},
+    cartridge::Cartridge,
+    mbc::mbc::Location,
+    options::Options,
+};
 
 /// Width of the gameboy screen in pixels
 pub const SCREEN_WIDTH: usize = 160;
@@ -84,11 +89,14 @@ enum Mode {
 }
 
 pub struct Emulator {
-    /// Output buffer for the screen which is shared with the GUI thread
-    output_buffer: SharedOutputBuffer,
+    /// Cartridge inserted
+    cartridge: Cartridge,
 
     /// Options for the emulator
     options: Arc<Options>,
+
+    /// Output buffer for the screen which is shared with the GUI thread
+    output_buffer: SharedOutputBuffer,
 
     /// Current tick (T-cycle) within a frame
     tick: u32,
@@ -101,10 +109,11 @@ pub struct Emulator {
 }
 
 impl Emulator {
-    pub fn new(options: Arc<Options>) -> Self {
+    pub fn new(cartridge: Cartridge, options: Arc<Options>) -> Self {
         Emulator {
-            output_buffer: SharedOutputBuffer::new(),
+            cartridge,
             options,
+            output_buffer: SharedOutputBuffer::new(),
             tick: 0,
             frame: 0,
             mode: Mode::OAMScan,
@@ -125,6 +134,10 @@ impl Emulator {
 
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
         self.output_buffer.clone()
+    }
+
+    pub fn insert_cartridge(&mut self, cartridge: Cartridge) {
+        // TODO
     }
 
     /// Run the emulator at the GameBoy's native framerate
@@ -202,7 +215,7 @@ impl Emulator {
 
         match self.mode {
             Mode::Draw => {
-                // TODO: write a pixel
+                // TODO: Write a pixel
             }
             Mode::VBlank | Mode::HBlank => {}
             Mode::OAMScan => {}
@@ -228,6 +241,48 @@ impl Emulator {
         }
 
         // TODO: Switch to HBlank at end of draw period of variable length
+    }
+
+    /// Read a byte from the given virtual address.
+    ///
+    /// May be mapped to a register or may be mapped to cartridge memory via the MBC.
+    fn read_address(&self, addr: Address) -> u8 {
+        if addr < ROM_END {
+            // No support needed yet for reading registers from RAM area
+            let mapped_addr = self.cartridge.mbc().map_read_rom_address(addr);
+            self.cartridge.rom()[mapped_addr]
+        } else if addr < VRAM_END {
+            todo!("Read from VRAM")
+        } else if addr < EXTERNAL_RAM_END {
+            match self.cartridge.mbc().map_read_ram_address(addr) {
+                Location::Address(mapped_addr) => self.cartridge.ram()[mapped_addr],
+                Location::Register(reg) => self.cartridge.mbc().read_register(reg),
+            }
+        } else {
+            todo!("Unsupported read")
+        }
+    }
+
+    /// Write a byte to the given virtual address.
+    ///
+    /// May be mapped to a register or may be mapped to cartridge memory via the MBC.
+    fn write_address(&mut self, addr: Address, value: u8) {
+        if addr < ROM_END {
+            match self.cartridge.mbc().map_write_rom_address(addr) {
+                // Writes to physical ROM memory are ignored
+                Location::Address(_) => {}
+                Location::Register(reg) => self.cartridge.mbc_mut().write_register(reg, value),
+            }
+        } else if addr < VRAM_END {
+            todo!("Write to VRAM")
+        } else if addr < EXTERNAL_RAM_END {
+            match self.cartridge.mbc().map_write_ram_address(addr) {
+                Location::Address(mapped_addr) => self.cartridge.ram_mut()[mapped_addr] = value,
+                Location::Register(reg) => self.cartridge.mbc_mut().write_register(reg, value),
+            }
+        } else {
+            todo!("Unsupported write")
+        }
     }
 }
 

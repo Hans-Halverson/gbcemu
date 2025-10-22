@@ -1,9 +1,9 @@
 use clap::Parser;
 use gbcemu::{
+    cartridge::Cartridge,
     emulator::{Emulator, SharedOutputBuffer},
     gui::start_gui,
     options::{Args, Options},
-    rom::Rom,
 };
 
 use std::{
@@ -16,14 +16,14 @@ fn main() {
     let options = Arc::new(Options::from_args(&args));
 
     let rom_bytes = read_file(&args.rom);
-    let rom = Rom::new_from_bytes(rom_bytes);
+    let cartridge = Cartridge::new_from_rom_bytes(rom_bytes);
 
-    if args.dump_rom {
-        println!("{:?}", rom);
+    if args.dump_rom_info {
+        println!("{:?}", cartridge);
         return;
     }
 
-    let (emulator_thread, shared_output_buffer) = start_emulator_thread(options.clone());
+    let (emulator_thread, shared_output_buffer) = start_emulator_thread(options.clone(), cartridge);
 
     if !args.headless {
         start_gui(shared_output_buffer);
@@ -38,11 +38,14 @@ fn read_file(path: &str) -> Vec<u8> {
 
 /// Start the emulator in a separate thread and return a buffer where results can be written that
 /// can be shared across threads.
-fn start_emulator_thread(options: Arc<Options>) -> (JoinHandle<()>, SharedOutputBuffer) {
+fn start_emulator_thread(
+    options: Arc<Options>,
+    cartridge: Cartridge,
+) -> (JoinHandle<()>, SharedOutputBuffer) {
     let (sender, receiver) = channel();
 
     let emulator_thread = thread::spawn(move || {
-        let mut emulator = Box::new(Emulator::new(options));
+        let mut emulator = Box::new(Emulator::new(cartridge, options));
         sender.send(emulator.clone_output_buffer()).unwrap();
         emulator.run();
     });

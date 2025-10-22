@@ -5,7 +5,7 @@ use clap::Parser;
 pub struct Args {
     /// Print info about the ROM to stdout
     #[arg(long, default_value_t = false)]
-    pub dump_rom: bool,
+    pub dump_rom_info: bool,
 
     /// Log information about each frame to stdout
     #[arg(long, default_value_t = false)]

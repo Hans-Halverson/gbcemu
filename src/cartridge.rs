@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::mbc::mbc::{Mbc, MbcKind, create_mbc};
+
 struct Scanner<'a> {
     data: &'a [u8],
     /// Current position in the buffer
@@ -39,9 +41,15 @@ const NINTENDO_LOGO: [u8; 48] = [
     0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
 ];
 
-pub struct Rom {
+pub struct Cartridge {
     /// Raw ROM data
-    data: Vec<u8>,
+    rom: Vec<u8>,
+
+    /// RAM for this cartridge
+    ram: Vec<u8>,
+
+    /// Memory Bank Controller for this cartridge
+    mbc: Box<dyn Mbc>,
 
     /// The code executed at startup.
     ///
@@ -53,17 +61,35 @@ pub struct Rom {
 
     /// Cartridge type byte
     cartridge_type_byte: u8,
-
-    /// Size of the ROM in bytes
-    rom_size: usize,
-
-    /// Size of the RAM in bytes
-    ram_size: usize,
 }
 
-impl Rom {
-    pub fn new_from_bytes(data: Vec<u8>) -> Rom {
-        let mut scanner = Scanner::new(&data);
+impl Cartridge {
+    pub fn rom(&self) -> &[u8] {
+        &self.rom
+    }
+
+    pub fn rom_mut(&mut self) -> &mut [u8] {
+        &mut self.rom
+    }
+
+    pub fn ram(&self) -> &[u8] {
+        &self.ram
+    }
+
+    pub fn ram_mut(&mut self) -> &mut [u8] {
+        &mut self.ram
+    }
+
+    pub fn mbc(&self) -> &dyn Mbc {
+        self.mbc.as_ref()
+    }
+
+    pub fn mbc_mut(&mut self) -> &mut dyn Mbc {
+        self.mbc.as_mut()
+    }
+
+    pub fn new_from_rom_bytes(rom_bytes: Vec<u8>) -> Self {
+        let mut scanner = Scanner::new(&rom_bytes);
 
         // Header starts at 0x0100
         scanner.seek(0x0100);
@@ -92,14 +118,20 @@ impl Rom {
         // Skip cartridge type (1 byte),
         let cartridge_type_byte = scanner.read_u8();
 
+        // Create MBC for this cartridge type
+        let mbc_kind = Self::mbc_kind_for_cartridge_type(cartridge_type_byte);
+        let mbc = create_mbc(mbc_kind);
+
         // ROM size (1 byte)
         let rom_size_byte = scanner.read_u8();
         assert!(rom_size_byte <= 0x08, "Unsupported ROM size");
+
         let rom_size = (32 * 1024) << rom_size_byte;
+        assert_eq!(rom_bytes.len(), rom_size, "ROM size mismatch");
 
         // RAM size (1 byte)
         let ram_size_byte = scanner.read_u8();
-        let ram_size = match ram_size_byte {
+        let mut ram_size = match ram_size_byte {
             0x00 | 0x01 => 0,
             0x02 => 8 * 1024,
             0x03 => 32 * 1024,
@@ -107,7 +139,14 @@ impl Rom {
             0x05 => 64 * 1024,
             _ => panic!("Unsupported RAM size"),
         };
-        assert_eq!(data.len(), rom_size, "ROM size mismatch");
+
+        // Treat no MBC as having 8KB of external RAM so that the MBC trait's mappings always map to
+        // the cartridge's external RAM (for consistency).
+        if mbc_kind == MbcKind::None {
+            ram_size = 8 * 1024;
+        }
+
+        let ram = vec![0; ram_size];
 
         // Skip destination code (1 byte)
         scanner.skip(1);
@@ -120,20 +159,20 @@ impl Rom {
 
         // Header checksum (1 byte)
         let header_checksum = scanner.read_u8();
-        Self::validate_header_checksum(&data, header_checksum);
+        Self::validate_header_checksum(&rom_bytes, header_checksum);
 
         // Skip global checksum (2 bytes)
         scanner.skip(2);
 
         assert_eq!(scanner.pos, 0x0150, "Unexpected header size");
 
-        Rom {
-            data,
+        Cartridge {
+            rom: rom_bytes,
+            ram,
+            mbc,
             entry_point_code,
             title,
             cartridge_type_byte,
-            rom_size,
-            ram_size,
         }
     }
 
@@ -144,13 +183,21 @@ impl Rom {
         }
         assert_eq!(sum, checksum, "Header checksum mismatch");
     }
+
+    fn mbc_kind_for_cartridge_type(cartridge_type: u8) -> MbcKind {
+        match cartridge_type {
+            0x00 => MbcKind::None,
+            0x01..=0x03 => MbcKind::Mbc1,
+            _ => panic!("Unsupported cartridge type: {:02X}", cartridge_type),
+        }
+    }
 }
 
-impl fmt::Debug for Rom {
+impl fmt::Debug for Cartridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Rom {{
+            "Cartridge {{
   entry_point_code: {:02X?},
   title: {},
   cartridge_type_byte: {:02X},
@@ -160,8 +207,10 @@ impl fmt::Debug for Rom {
             self.entry_point_code,
             self.title,
             self.cartridge_type_byte,
-            self.rom_size,
-            self.ram_size
+            self.rom.len(),
+            self.ram.len()
         )
     }
 }
+
+unsafe impl Send for Cartridge {}
