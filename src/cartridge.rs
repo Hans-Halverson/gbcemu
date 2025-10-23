@@ -61,6 +61,9 @@ pub struct Cartridge {
 
     /// Cartridge type byte
     cartridge_type_byte: u8,
+
+    /// Whether this is a CGB-compatible cartridge
+    is_cgb: bool,
 }
 
 impl Cartridge {
@@ -88,6 +91,10 @@ impl Cartridge {
         self.mbc.as_mut()
     }
 
+    pub fn is_cgb(&self) -> bool {
+        self.is_cgb
+    }
+
     pub fn new_from_rom_bytes(rom_bytes: Vec<u8>) -> Self {
         let mut scanner = Scanner::new(&rom_bytes);
 
@@ -112,8 +119,9 @@ impl Cartridge {
         // Skip new licensee code (2 bytes)
         scanner.skip(2);
 
-        // Skip SGB flag (1 byte)
-        scanner.skip(1);
+        // Skip CGB flag (1 byte)
+        let cgb_byte = scanner.read_u8();
+        let is_cgb = (cgb_byte & 0x80) != 0;
 
         // Skip cartridge type (1 byte),
         let cartridge_type_byte = scanner.read_u8();
@@ -173,6 +181,7 @@ impl Cartridge {
             entry_point_code,
             title,
             cartridge_type_byte,
+            is_cgb,
         }
     }
 
@@ -201,12 +210,14 @@ impl fmt::Debug for Cartridge {
   entry_point_code: {:02X?},
   title: {},
   cartridge_type_byte: {:02X},
+  is_cgb: {},
   rom_size: {},
   ram_size: {},
 }}",
             self.entry_point_code,
             self.title,
             self.cartridge_type_byte,
+            self.is_cgb,
             self.rom.len(),
             self.ram.len()
         )

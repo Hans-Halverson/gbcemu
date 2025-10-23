@@ -3,6 +3,7 @@ use gbcemu::{
     cartridge::Cartridge,
     emulator::{Emulator, SharedOutputBuffer},
     gui::start_gui,
+    machine::Machine,
     options::{Args, Options},
 };
 
@@ -18,12 +19,15 @@ fn main() {
     let rom_bytes = read_file(&args.rom);
     let cartridge = Cartridge::new_from_rom_bytes(rom_bytes);
 
+    let machine = if args.cgb { Machine::Cgb } else { Machine::Dmg };
+
     if args.dump_rom_info {
         println!("{:?}", cartridge);
         return;
     }
 
-    let (emulator_thread, shared_output_buffer) = start_emulator_thread(options.clone(), cartridge);
+    let (emulator_thread, shared_output_buffer) =
+        start_emulator_thread(options.clone(), cartridge, machine);
 
     if !args.headless {
         start_gui(shared_output_buffer);
@@ -41,11 +45,12 @@ fn read_file(path: &str) -> Vec<u8> {
 fn start_emulator_thread(
     options: Arc<Options>,
     cartridge: Cartridge,
+    machine: Machine,
 ) -> (JoinHandle<()>, SharedOutputBuffer) {
     let (sender, receiver) = channel();
 
     let emulator_thread = thread::spawn(move || {
-        let mut emulator = Box::new(Emulator::new(cartridge, options));
+        let mut emulator = Box::new(Emulator::new(cartridge, machine, options));
         sender.send(emulator.clone_output_buffer()).unwrap();
         emulator.run();
     });

@@ -7,6 +7,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dump_rom_info: bool,
 
+    /// Emulate a GameBoy Color instead of a regular GameBoy
+    #[arg(long, default_value_t = false)]
+    pub cgb: bool,
+
     /// Log information about each frame to stdout
     #[arg(long, default_value_t = false)]
     pub log_frames: bool,

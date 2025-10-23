@@ -1,6 +1,7 @@
 use crate::{
     address_space::{
-        Address, EXTERNAL_RAM_START, FIRST_ROM_BANK_END, RAM_BANK_SIZE, ROM_BANK_SIZE,
+        Address, EXTERNAL_RAM_START, FIRST_ROM_BANK_END, ROM_BANK_SIZE,
+        SINGLE_EXTERNAL_RAM_BANK_SIZE,
     },
     mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
 };
@@ -8,7 +9,7 @@ use crate::{
 pub struct Mbc1 {
     /// RAM Enable Register (0000–1FFF)
     is_ram_enabled: bool,
-    /// ROM Bank Number (2000–3FFF)
+    /// ROM Bank Number, 5 bits (2000–3FFF)
     rom_bank_num: usize,
     /// RAM Bank Number or Upper Bits of ROM Bank Number (4000–5FFF)
     ///
@@ -77,7 +78,7 @@ impl Mbc1 {
 
     /// Address expected to be in the range 0xA000-0xC000
     fn physical_ram_bank_address(bank_num: usize, addr: Address) -> usize {
-        let physical_bank_start_offset = bank_num * RAM_BANK_SIZE;
+        let physical_bank_start_offset = bank_num * SINGLE_EXTERNAL_RAM_BANK_SIZE;
         let offset_in_bank = (addr - EXTERNAL_RAM_START) as usize;
         let physical_addr = physical_bank_start_offset + offset_in_bank;
 

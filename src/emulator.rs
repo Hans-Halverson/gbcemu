@@ -11,8 +11,16 @@ use std::{
 use eframe::egui::Color32;
 
 use crate::{
-    address_space::{Address, EXTERNAL_RAM_END, ROM_END, VRAM_END},
+    address_space::{
+        Address, EXTERNAL_RAM_END, FIRST_WORK_RAM_BANK_END, FIRST_WORK_RAM_BANK_START, HRAM_END,
+        HRAM_SIZE, HRAM_START, IE_ADDRESS, IO_REGISTERS_END, OAM_END, OAM_SIZE, OAM_START, ROM_END,
+        SECOND_WORK_RAM_BANK_END, SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE,
+        SINGLE_WORK_RAM_BANK_SIZE, TOTAL_WORK_RAM_SIZE, VRAM_END, VRAM_START,
+    },
     cartridge::Cartridge,
+    initialization::IE_INIT,
+    io_registers::IoRegisters,
+    machine::Machine,
     mbc::mbc::Location,
     options::Options,
 };
@@ -61,6 +69,8 @@ impl SharedOutputBuffer {
     }
 }
 
+pub type Register = u8;
+
 /// Refresh rate of the GameBoy screen in Hz
 const REFRESH_RATE: f64 = 59.7;
 
@@ -92,6 +102,9 @@ pub struct Emulator {
     /// Cartridge inserted
     cartridge: Cartridge,
 
+    /// Which machine is running (DMG, CGB, etc)
+    machine: Machine,
+
     /// Options for the emulator
     options: Arc<Options>,
 
@@ -106,17 +119,48 @@ pub struct Emulator {
 
     /// Current mode
     mode: Mode,
+
+    /// Whether the emulator is currently in CGB mode
+    in_cgb_mode: bool,
+
+    /// VRAM region, including all banks
+    vram: Vec<u8>,
+
+    /// OAM region (Object Attribute Memory)
+    oam: Vec<u8>,
+
+    /// HRAM region (High RAM)
+    hram: Vec<u8>,
+
+    /// Work RAM region, including all banks
+    work_ram: Vec<u8>,
+
+    /// IO register file
+    io_registers: IoRegisters,
+
+    /// Interrupt Enable register (0xFFFF) (IE)
+    ie: Register,
 }
 
 impl Emulator {
-    pub fn new(cartridge: Cartridge, options: Arc<Options>) -> Self {
+    pub fn new(cartridge: Cartridge, machine: Machine, options: Arc<Options>) -> Self {
+        let is_cgb = cartridge.is_cgb();
+
         Emulator {
             cartridge,
+            machine,
             options,
             output_buffer: SharedOutputBuffer::new(),
             tick: 0,
             frame: 0,
             mode: Mode::OAMScan,
+            in_cgb_mode: is_cgb,
+            vram: vec![0; machine.vram_size()],
+            oam: vec![0; OAM_SIZE],
+            hram: vec![0; HRAM_SIZE],
+            work_ram: vec![0; TOTAL_WORK_RAM_SIZE],
+            io_registers: IoRegisters::init_for_machine(machine),
+            ie: IE_INIT,
         }
     }
 
@@ -134,10 +178,6 @@ impl Emulator {
 
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
         self.output_buffer.clone()
-    }
-
-    pub fn insert_cartridge(&mut self, cartridge: Cartridge) {
-        // TODO
     }
 
     /// Run the emulator at the GameBoy's native framerate
@@ -252,14 +292,31 @@ impl Emulator {
             let mapped_addr = self.cartridge.mbc().map_read_rom_address(addr);
             self.cartridge.rom()[mapped_addr]
         } else if addr < VRAM_END {
-            todo!("Read from VRAM")
+            let physical_addr = self.physical_vram_bank_address(addr);
+            self.vram[physical_addr]
         } else if addr < EXTERNAL_RAM_END {
             match self.cartridge.mbc().map_read_ram_address(addr) {
                 Location::Address(mapped_addr) => self.cartridge.ram()[mapped_addr],
                 Location::Register(reg) => self.cartridge.mbc().read_register(reg),
             }
+        } else if addr < FIRST_WORK_RAM_BANK_END {
+            let physical_addr = self.physical_first_work_ram_bank_address(addr);
+            self.work_ram[physical_addr]
+        } else if addr < SECOND_WORK_RAM_BANK_END {
+            let physical_addr = self.physical_second_work_ram_bank_address(addr);
+            self.work_ram[physical_addr]
+        } else if addr < OAM_END {
+            let physical_addr = self.physical_oam_address(addr);
+            self.oam[physical_addr]
+        } else if addr < IO_REGISTERS_END {
+            self.io_registers.read_register(addr)
+        } else if addr < HRAM_END {
+            let physical_addr = self.physical_hram_address(addr);
+            self.hram[physical_addr]
+        } else if addr == IE_ADDRESS {
+            self.ie
         } else {
-            todo!("Unsupported read")
+            unreachable!()
         }
     }
 
@@ -274,15 +331,64 @@ impl Emulator {
                 Location::Register(reg) => self.cartridge.mbc_mut().write_register(reg, value),
             }
         } else if addr < VRAM_END {
-            todo!("Write to VRAM")
+            let physical_addr = self.physical_vram_bank_address(addr);
+            self.vram[physical_addr] = value;
         } else if addr < EXTERNAL_RAM_END {
             match self.cartridge.mbc().map_write_ram_address(addr) {
                 Location::Address(mapped_addr) => self.cartridge.ram_mut()[mapped_addr] = value,
                 Location::Register(reg) => self.cartridge.mbc_mut().write_register(reg, value),
             }
+        } else if addr < FIRST_WORK_RAM_BANK_END {
+            let physical_addr = self.physical_first_work_ram_bank_address(addr);
+            self.work_ram[physical_addr] = value;
+        } else if addr < SECOND_WORK_RAM_BANK_END {
+            let physical_addr = self.physical_second_work_ram_bank_address(addr);
+            self.work_ram[physical_addr] = value;
+        } else if addr < OAM_END {
+            let physical_addr = self.physical_oam_address(addr);
+            self.oam[physical_addr] = value;
+        } else if addr < IO_REGISTERS_END {
+            self.io_registers.write_register(addr, value)
+        } else if addr < HRAM_END {
+            let physical_addr = self.physical_hram_address(addr);
+            self.hram[physical_addr] = value;
+        } else if addr == IE_ADDRESS {
+            self.ie = value;
         } else {
-            todo!("Unsupported write")
+            unreachable!()
         }
+    }
+
+    fn physical_vram_bank_address(&self, addr: Address) -> usize {
+        let bank_num = if self.in_cgb_mode {
+            (self.io_registers.vbk() & 0x01) as usize
+        } else {
+            0
+        };
+
+        (addr - VRAM_START) as usize + bank_num * SINGLE_VRAM_BANK_SIZE
+    }
+
+    fn physical_first_work_ram_bank_address(&self, addr: Address) -> usize {
+        (addr - FIRST_WORK_RAM_BANK_START) as usize
+    }
+
+    /// Cannot access bank 0, instead return bank 1
+    fn wram_bank_num(&self) -> usize {
+        self.io_registers.wbk().max(1) as usize
+    }
+
+    fn physical_second_work_ram_bank_address(&self, addr: Address) -> usize {
+        (addr - SECOND_WORK_RAM_BANK_START) as usize
+            + SINGLE_WORK_RAM_BANK_SIZE * self.wram_bank_num()
+    }
+
+    fn physical_oam_address(&self, addr: Address) -> usize {
+        (addr - OAM_START) as usize
+    }
+
+    fn physical_hram_address(&self, addr: Address) -> usize {
+        (addr - HRAM_START) as usize
     }
 }
 
