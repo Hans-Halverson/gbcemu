@@ -309,7 +309,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr]
         } else if addr < IO_REGISTERS_END {
-            self.io_registers.read_register(addr)
+            self.io_registers.read_register_raw(addr)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr]
@@ -348,7 +348,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr] = value;
         } else if addr < IO_REGISTERS_END {
-            self.io_registers.write_register(addr, value)
+            self.io_registers.write_register_raw(addr, value)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr] = value;
