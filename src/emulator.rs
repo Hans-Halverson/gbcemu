@@ -23,6 +23,7 @@ use crate::{
     machine::Machine,
     mbc::mbc::Location,
     options::Options,
+    ppu::{Color, draw_scanline},
 };
 
 /// Width of the gameboy screen in pixels
@@ -68,6 +69,14 @@ impl SharedOutputBuffer {
         self.pixels[y][x].store(encoded, Ordering::Relaxed);
     }
 }
+
+/// A green color palette for the original GameBoy screen.
+const SCREEN_COLOR_PALETTE: [Color32; 4] = [
+    Color32::from_rgb(0x9B, 0xBC, 0x0F),
+    Color32::from_rgb(0x8B, 0xAC, 0x0F),
+    Color32::from_rgb(0x30, 0x62, 0x30),
+    Color32::from_rgb(0x0F, 0x38, 0x0F),
+];
 
 pub type Register = u8;
 
@@ -117,6 +126,9 @@ pub struct Emulator {
     /// Current frame number
     frame: u64,
 
+    /// Current (virtual) scanline number
+    scanline: u8,
+
     /// Current mode
     mode: Mode,
 
@@ -153,6 +165,7 @@ impl Emulator {
             output_buffer: SharedOutputBuffer::new(),
             tick: 0,
             frame: 0,
+            scanline: 0,
             mode: Mode::OAMScan,
             in_cgb_mode: is_cgb,
             vram: vec![0; machine.vram_size()],
@@ -172,12 +185,16 @@ impl Emulator {
         self.tick as usize / TICKS_PER_SCANLINE
     }
 
-    pub fn write_pixel(&self, x: usize, y: usize, color: Color32) {
-        self.output_buffer.write_pixel(x, y, color);
-    }
-
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
         self.output_buffer.clone()
+    }
+
+    pub fn oam(&self) -> &[u8] {
+        &self.oam
+    }
+
+    pub fn io_registers(&self) -> &IoRegisters {
+        &self.io_registers
     }
 
     /// Run the emulator at the GameBoy's native framerate
@@ -185,8 +202,6 @@ impl Emulator {
         let start_time = Instant::now();
 
         loop {
-            self.tick = 0;
-
             let frame_start_nanos = duration_to_nanos(Instant::now().duration_since(start_time));
             if self.options.log_frames {
                 let expected_frame_start_nanos = NS_PER_FRAME as u64 * self.frame;
@@ -201,9 +216,7 @@ impl Emulator {
             }
 
             // Run a single frame
-            for _ in 0..TICKS_PER_FRAME {
-                self.run_tick();
-            }
+            self.run_frame();
 
             // Increment frame number
             self.frame += 1;
@@ -240,10 +253,61 @@ impl Emulator {
                 }
 
                 thread::sleep(Duration::from_nanos(
-                    nanos_to_next_frame - (NS_PER_FRAME as u64 / 20),
+                    nanos_to_next_frame.saturating_sub(NS_PER_FRAME as u64 / 20),
                 ));
             }
         }
+    }
+
+    fn run_frame(&mut self) {
+        self.tick = 0;
+
+        for i in 0..(NUM_VIRTUAL_SCANLINES as u8) {
+            self.run_scanline(i);
+        }
+    }
+
+    fn run_scanline(&mut self, scanline: u8) {
+        self.scanline = scanline;
+        self.io_registers.write_ly(self.scanline);
+
+        if scanline < SCREEN_HEIGHT as u8 {
+            self.mode = Mode::OAMScan;
+
+            for _ in 0..OAM_SCAN_TICKS {
+                self.run_tick();
+            }
+
+            draw_scanline(self, scanline);
+
+            self.mode = Mode::Draw;
+            // TODO: Variable length draw period
+
+            self.mode = Mode::HBlank;
+            // TODO: Variable length hblank period
+
+            for _ in 0..(TICKS_PER_SCANLINE - OAM_SCAN_TICKS) {
+                self.run_tick();
+            }
+        } else {
+            // Enter VBlank at the start of the first scanline after the screen
+            if scanline == SCREEN_HEIGHT as u8 {
+                self.mode = Mode::VBlank;
+            }
+
+            // VBlank simply ticks along with nothing drawn
+            for _ in 0..TICKS_PER_SCANLINE {
+                self.run_tick();
+            }
+        }
+    }
+
+    pub fn write_color(&self, x: u8, y: u8, color: Color) {
+        self.output_buffer.write_pixel(
+            x as usize,
+            y as usize,
+            SCREEN_COLOR_PALETTE[color as usize],
+        );
     }
 
     fn run_tick(&mut self) {
@@ -286,7 +350,7 @@ impl Emulator {
     /// Read a byte from the given virtual address.
     ///
     /// May be mapped to a register or may be mapped to cartridge memory via the MBC.
-    fn read_address(&self, addr: Address) -> u8 {
+    pub fn read_address(&self, addr: Address) -> u8 {
         if addr < ROM_END {
             // No support needed yet for reading registers from RAM area
             let mapped_addr = self.cartridge.mbc().map_read_rom_address(addr);
@@ -309,7 +373,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr]
         } else if addr < IO_REGISTERS_END {
-            self.io_registers.read_register_raw(addr)
+            self.io_registers.read_register(addr)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr]
@@ -348,7 +412,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr] = value;
         } else if addr < IO_REGISTERS_END {
-            self.io_registers.write_register_raw(addr, value)
+            self.io_registers.write_register(addr, value)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr] = value;

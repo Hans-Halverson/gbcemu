@@ -7,3 +7,4 @@ mod io_registers;
 pub mod machine;
 mod mbc;
 pub mod options;
+mod ppu;
