@@ -19,7 +19,10 @@ pub struct Registers {
     zero_flag: bool,
 
     /// Set when addition or subtraction overflows, or when a 1 bit is shifted out
-    subtract_flag: bool,
+    carry_flag: bool,
+
+    /// Whether any interrupt are enabled, if disabled no interrupts will be handled
+    interrupts_enabled: bool,
 }
 
 impl Registers {
@@ -31,9 +34,10 @@ impl Registers {
             bc: [0x00, 0x13],
             de: [0x00, 0xD8],
             hl: [0x01, 0x4D],
-            zero_flag: false,
+            zero_flag: true,
             // Variable depending on header checksum, choose an arbitrary value
-            subtract_flag: false,
+            carry_flag: false,
+            interrupts_enabled: false,
         }
     }
 
@@ -45,8 +49,9 @@ impl Registers {
             bc: [0x00, 0x00],
             de: [0xFF, 0x56],
             hl: [0x00, 0x0D],
-            zero_flag: false,
-            subtract_flag: false,
+            zero_flag: true,
+            carry_flag: false,
+            interrupts_enabled: false,
         }
     }
 
@@ -161,11 +166,15 @@ impl Registers {
         self.zero_flag = value;
     }
 
-    pub fn subtract_flag(&self) -> bool {
-        self.subtract_flag
+    pub fn carry_flag(&self) -> bool {
+        self.carry_flag
     }
 
-    pub fn set_subtract_flag(&mut self, value: bool) {
-        self.subtract_flag = value;
+    pub fn set_carry_flag(&mut self, value: bool) {
+        self.carry_flag = value;
+    }
+
+    pub fn set_interrupts_enabled(&mut self, value: bool) {
+        self.interrupts_enabled = value;
     }
 }

@@ -316,10 +316,14 @@ impl Emulator {
         }
     }
 
+    pub fn schedule_next_instruction(&mut self, ticks: usize) {
+        self.ticks_to_next_instruction = ticks;
+    }
+
     fn run_tick(&mut self) {
         // Execute an instruction if the previous one has finished
         if self.ticks_to_next_instruction == 0 {
-            self.ticks_to_next_instruction = self.execute_instruction();
+            self.execute_instruction();
         }
 
         self.ticks_to_next_instruction -= 1;
@@ -374,7 +378,7 @@ impl Emulator {
     /// Write a byte to the given virtual address.
     ///
     /// May be mapped to a register or may be mapped to cartridge memory via the MBC.
-    fn write_address(&mut self, addr: Address, value: u8) {
+    pub fn write_address(&mut self, addr: Address, value: u8) {
         if addr < ROM_END {
             match self.cartridge.mbc().map_write_rom_address(addr) {
                 // Writes to physical ROM memory are ignored
