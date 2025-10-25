@@ -93,12 +93,12 @@ const TRANSPARENT_COLOR_INDEX: ColorIndex = 0;
 ///
 /// Returns None if background and window are disabled.
 fn background_or_window_color_index(emulator: &Emulator, x: u8, y: u8) -> Option<ColorIndex> {
-    if !emulator.io_registers().lcdc_bg_window_enable() {
+    if !emulator.io_regs().lcdc_bg_window_enable() {
         return None;
     }
 
     // Find the tile map coordinates in the window if pixel is in the window
-    let window_coordinates = if emulator.io_registers().lcdc_window_enable() {
+    let window_coordinates = if emulator.io_regs().lcdc_window_enable() {
         window_tile_map_coordinates(emulator, x, y)
     } else {
         None
@@ -113,8 +113,7 @@ fn background_or_window_color_index(emulator: &Emulator, x: u8, y: u8) -> Option
     let tile_index =
         lookup_tile_in_tile_map(emulator, !is_window, tile_map_coordinates.tile_map_index);
 
-    let tile_data_area_number =
-        (emulator.io_registers().lcdc_bg_window_tile_data_area() == 0) as u8;
+    let tile_data_area_number = (emulator.io_regs().lcdc_bg_window_tile_data_area() == 0) as u8;
 
     // Lookup the color index at the offsets within this tile, stored in tile data area
     let color_index = lookup_color_index_in_tile(
@@ -139,8 +138,8 @@ struct TileMapCoordinates {
 /// Looks up the tile map index and offsets for the background at the given (x, y) screen
 /// coordinates accounting for scroll.
 fn background_tile_map_coordinates(emulator: &Emulator, x: u8, y: u8) -> TileMapCoordinates {
-    let scx = emulator.io_registers().scx();
-    let scy = emulator.io_registers().scy();
+    let scx = emulator.io_regs().scx();
+    let scy = emulator.io_regs().scy();
 
     // Final pixel index within the 256x256 background
     let background_x = scx.wrapping_add(x);
@@ -153,8 +152,8 @@ fn background_tile_map_coordinates(emulator: &Emulator, x: u8, y: u8) -> TileMap
 /// accounting for window position.
 fn window_tile_map_coordinates(emulator: &Emulator, x: u8, y: u8) -> Option<TileMapCoordinates> {
     // Window x register is offset by 7 to allow for specifying positions off-screen
-    let window_start_x = emulator.io_registers().wx() - 7;
-    let window_start_y = emulator.io_registers().wy();
+    let window_start_x = emulator.io_regs().wx() - 7;
+    let window_start_y = emulator.io_regs().wy();
 
     // Check if the pixel is within the window both horizontally and vertically
     if window_start_x > x || window_start_y > y {
@@ -197,9 +196,9 @@ const TILE_MAP_2_ADDRESS: usize = 0x9C00;
 /// Must specify whether looking up background or window tile map, as they can be different.
 fn lookup_tile_in_tile_map(emulator: &Emulator, is_background: bool, tile_map_index: usize) -> u8 {
     let tile_map_number = if is_background {
-        emulator.io_registers().lcdc_bg_tile_map_number()
+        emulator.io_regs().lcdc_bg_tile_map_number()
     } else {
-        emulator.io_registers().lcdc_window_tile_map_number()
+        emulator.io_regs().lcdc_window_tile_map_number()
     };
 
     let tile_map_base = if tile_map_number == 0 {
@@ -256,9 +255,9 @@ fn lookup_color_in_palette(palette: u8, color_index: ColorIndex) -> Color {
 
 fn object_color_palette(emulator: &Emulator, object: &Object) -> u8 {
     if object.dmg_palette_number() == 0 {
-        emulator.io_registers().obp0()
+        emulator.io_regs().obp0()
     } else {
-        emulator.io_registers().obp1()
+        emulator.io_regs().obp1()
     }
 }
 
@@ -269,10 +268,9 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
     for x in 0..(SCREEN_WIDTH as u8) {
         let background_color_index = background_or_window_color_index(emulator, x, scanline);
 
-        let mut final_color_index_and_palette =
-            (background_color_index, emulator.io_registers().bgp());
+        let mut final_color_index_and_palette = (background_color_index, emulator.io_regs().bgp());
 
-        if emulator.io_registers().lcdc_obj_enable() {
+        if emulator.io_regs().lcdc_obj_enable() {
             for object in &objects {
                 let current_object_x = screen_to_object_x(x);
                 let current_object_y = screen_to_object_y(scanline);

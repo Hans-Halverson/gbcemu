@@ -1,5 +1,6 @@
 mod address_space;
 pub mod cartridge;
+mod cpu;
 pub mod emulator;
 pub mod gui;
 mod initialization;

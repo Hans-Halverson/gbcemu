@@ -18,6 +18,7 @@ use crate::{
         SINGLE_WORK_RAM_BANK_SIZE, TOTAL_WORK_RAM_SIZE, VRAM_END, VRAM_START,
     },
     cartridge::Cartridge,
+    cpu::registers::Registers,
     initialization::IE_INIT,
     io_registers::IoRegisters,
     machine::Machine,
@@ -93,6 +94,11 @@ const TICKS_PER_SCANLINE: usize = TICKS_PER_FRAME / NUM_VIRTUAL_SCANLINES;
 /// Number of ticks in OAM Scan mode at the beginning of each scanline
 const OAM_SCAN_TICKS: usize = 80;
 
+/// Number of ticks in Draw mode. In reality this is variable, but we choose the minimum time here.
+const DRAW_TICKS: usize = 172;
+
+const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
+
 /// Nanoseconds in real time per frame
 const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
 
@@ -110,9 +116,6 @@ enum Mode {
 pub struct Emulator {
     /// Cartridge inserted
     cartridge: Cartridge,
-
-    /// Which machine is running (DMG, CGB, etc)
-    machine: Machine,
 
     /// Options for the emulator
     options: Arc<Options>,
@@ -147,11 +150,17 @@ pub struct Emulator {
     /// Work RAM region, including all banks
     work_ram: Vec<u8>,
 
+    /// Register file
+    regs: Registers,
+
     /// IO register file
-    io_registers: IoRegisters,
+    io_regs: IoRegisters,
 
     /// Interrupt Enable register (0xFFFF) (IE)
     ie: Register,
+
+    /// Number of ticks remaining until the next instruction is executed
+    ticks_to_next_instruction: usize,
 }
 
 impl Emulator {
@@ -160,7 +169,6 @@ impl Emulator {
 
         Emulator {
             cartridge,
-            machine,
             options,
             output_buffer: SharedOutputBuffer::new(),
             tick: 0,
@@ -172,17 +180,11 @@ impl Emulator {
             oam: vec![0; OAM_SIZE],
             hram: vec![0; HRAM_SIZE],
             work_ram: vec![0; TOTAL_WORK_RAM_SIZE],
-            io_registers: IoRegisters::init_for_machine(machine),
+            regs: Registers::init_for_machine(machine),
+            io_regs: IoRegisters::init_for_machine(machine),
             ie: IE_INIT,
+            ticks_to_next_instruction: 0,
         }
-    }
-
-    fn current_position_in_scanline(&self) -> usize {
-        self.tick as usize % TICKS_PER_SCANLINE
-    }
-
-    fn current_virtual_scanline(&self) -> usize {
-        self.tick as usize / TICKS_PER_SCANLINE
     }
 
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
@@ -193,8 +195,16 @@ impl Emulator {
         &self.oam
     }
 
-    pub fn io_registers(&self) -> &IoRegisters {
-        &self.io_registers
+    pub fn regs(&self) -> &Registers {
+        &self.regs
+    }
+
+    pub fn regs_mut(&mut self) -> &mut Registers {
+        &mut self.regs
+    }
+
+    pub fn io_regs(&self) -> &IoRegisters {
+        &self.io_regs
     }
 
     /// Run the emulator at the GameBoy's native framerate
@@ -269,24 +279,28 @@ impl Emulator {
 
     fn run_scanline(&mut self, scanline: u8) {
         self.scanline = scanline;
-        self.io_registers.write_ly(self.scanline);
+        self.io_regs.write_ly(self.scanline);
 
         if scanline < SCREEN_HEIGHT as u8 {
+            // Each scanline starts in OAM scan mode
             self.mode = Mode::OAMScan;
-
             for _ in 0..OAM_SCAN_TICKS {
                 self.run_tick();
             }
 
+            // Followed by a draw period. We simplify by making this a fixed length and drawing the
+            // entire scanline at once, at the start of the draw period.
+            self.mode = Mode::Draw;
+
             draw_scanline(self, scanline);
 
-            self.mode = Mode::Draw;
-            // TODO: Variable length draw period
+            for _ in 0..DRAW_TICKS {
+                self.run_tick();
+            }
 
+            // Finally enter HBlank for the rest of the scanline
             self.mode = Mode::HBlank;
-            // TODO: Variable length hblank period
-
-            for _ in 0..(TICKS_PER_SCANLINE - OAM_SCAN_TICKS) {
+            for _ in 0..HBLANK_TICKS {
                 self.run_tick();
             }
         } else {
@@ -302,49 +316,22 @@ impl Emulator {
         }
     }
 
+    fn run_tick(&mut self) {
+        // Execute an instruction if the previous one has finished
+        if self.ticks_to_next_instruction == 0 {
+            self.ticks_to_next_instruction = self.execute_instruction();
+        }
+
+        self.ticks_to_next_instruction -= 1;
+        self.tick += 1;
+    }
+
     pub fn write_color(&self, x: u8, y: u8, color: Color) {
         self.output_buffer.write_pixel(
             x as usize,
             y as usize,
             SCREEN_COLOR_PALETTE[color as usize],
         );
-    }
-
-    fn run_tick(&mut self) {
-        self.tick += 1;
-
-        self.update_mode_for_current_tick();
-
-        // TODO: Execute instruction
-
-        match self.mode {
-            Mode::Draw => {
-                // TODO: Write a pixel
-            }
-            Mode::VBlank | Mode::HBlank => {}
-            Mode::OAMScan => {}
-        }
-    }
-
-    /// Switch modes if needed at the start of a tick
-    fn update_mode_for_current_tick(&mut self) {
-        let scanline_position = self.current_position_in_scanline();
-
-        if scanline_position == OAM_SCAN_TICKS {
-            // Reached end of OAM Scan, start Draw
-            self.mode = Mode::Draw;
-        } else if scanline_position == 0 {
-            // Start of new scanline. Could be OAM if scanline is on screen, otherwise first
-            // scanline off the screen starts VBlank
-            let current_virtual_scanline = self.current_virtual_scanline();
-            if current_virtual_scanline < SCREEN_HEIGHT {
-                self.mode = Mode::OAMScan;
-            } else if current_virtual_scanline == SCREEN_HEIGHT {
-                self.mode = Mode::VBlank;
-            }
-        }
-
-        // TODO: Switch to HBlank at end of draw period of variable length
     }
 
     /// Read a byte from the given virtual address.
@@ -373,7 +360,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr]
         } else if addr < IO_REGISTERS_END {
-            self.io_registers.read_register(addr)
+            self.io_regs.read_register(addr)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr]
@@ -412,7 +399,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr] = value;
         } else if addr < IO_REGISTERS_END {
-            self.io_registers.write_register(addr, value)
+            self.io_regs.write_register(addr, value)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr] = value;
@@ -425,7 +412,7 @@ impl Emulator {
 
     fn physical_vram_bank_address(&self, addr: Address) -> usize {
         let bank_num = if self.in_cgb_mode {
-            (self.io_registers.vbk() & 0x01) as usize
+            (self.io_regs.vbk() & 0x01) as usize
         } else {
             0
         };
@@ -439,7 +426,7 @@ impl Emulator {
 
     /// Cannot access bank 0, instead return bank 1
     fn wram_bank_num(&self) -> usize {
-        self.io_registers.wbk().max(1) as usize
+        self.io_regs.wbk().max(1) as usize
     }
 
     fn physical_second_work_ram_bank_address(&self, addr: Address) -> usize {
