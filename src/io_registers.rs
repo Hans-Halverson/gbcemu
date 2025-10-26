@@ -33,6 +33,10 @@ impl IoRegisters {
         self.registers[offset(address)] = value;
     }
 
+    pub fn lcdc_lcd_enable(&self) -> bool {
+        self.lcdc() & 0x80 != 0
+    }
+
     pub fn lcdc_window_tile_map_number(&self) -> u8 {
         self.lcdc() & 0x40
     }
@@ -55,6 +59,22 @@ impl IoRegisters {
 
     pub fn lcdc_bg_window_enable(&self) -> bool {
         self.lcdc() & 0x01 != 0
+    }
+
+    pub fn stat_hblank_interrupt_enabled(&self) -> bool {
+        self.stat() & 0x08 != 0
+    }
+
+    pub fn stat_vblank_interrupt_enabled(&self) -> bool {
+        self.stat() & 0x10 != 0
+    }
+
+    pub fn stat_oam_scan_interrupt_enabled(&self) -> bool {
+        self.stat() & 0x20 != 0
+    }
+
+    pub fn stat_lyc_interrupt_enabled(&self) -> bool {
+        self.stat() & 0x40 != 0
     }
 }
 
@@ -111,9 +131,12 @@ const VARIABLE: u8 = 0xFF;
 const UNITIALIZED: u8 = 0xFF;
 
 define_registers!(
+    (if_, 0xFF00, 0xE1, 0xE1),
     (lcdc, 0xFF40, 0x91, 0x91),
+    (stat, 0xFF41, 0x85, VARIABLE),
     (scy, 0xFF42, NONE, 0x00),
     (scx, 0xFF43, NONE, 0x00),
+    (lyc, 0xFF45, 0x0, 0x00),
     (wy, 0xFF4A, NONE, 0x00),
     (wx, 0xFF4B, NONE, 0x00),
     (ly, 0xFF44, 0x91, VARIABLE),

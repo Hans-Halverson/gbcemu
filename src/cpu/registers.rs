@@ -187,6 +187,10 @@ impl Registers {
         self.carry_flag = value;
     }
 
+    pub fn interrupts_enabled(&self) -> bool {
+        self.interrupts_enabled
+    }
+
     pub fn set_interrupts_enabled(&mut self, value: bool) {
         self.interrupts_enabled = value;
     }

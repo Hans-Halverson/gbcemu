@@ -102,15 +102,57 @@ const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
 /// Nanoseconds in real time per frame
 const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
 
+#[derive(Clone, Copy)]
 enum Mode {
     /// Mode 0: Move to the next scanline
     HBlank,
     /// Mode 1: Move back to start of screen
     VBlank,
     /// Mode 2: Search OAM for sprites in current scanline
-    OAMScan,
+    OamScan,
     /// Mode 3: Draw pixels to screen
     Draw,
+}
+
+pub enum Interrupt {
+    VBlank,
+    LCDStat,
+    Timer,
+    Serial,
+    Joypad,
+}
+
+impl Interrupt {
+    fn flag_bit(&self) -> u8 {
+        match self {
+            Interrupt::VBlank => 0x01,
+            Interrupt::LCDStat => 0x02,
+            Interrupt::Timer => 0x04,
+            Interrupt::Serial => 0x08,
+            Interrupt::Joypad => 0x10,
+        }
+    }
+
+    pub fn handler_address(&self) -> Address {
+        match self {
+            Interrupt::VBlank => 0x40,
+            Interrupt::LCDStat => 0x48,
+            Interrupt::Timer => 0x50,
+            Interrupt::Serial => 0x58,
+            Interrupt::Joypad => 0x60,
+        }
+    }
+}
+
+/// The `ei` instruction enables interrupts after the next instruction completes. Use a small state
+/// machine to simulate this.
+enum PendingEnableInterrupt {
+    None,
+    AfterNextInstruction,
+    /// Set to repeat if two `ei` instructions are executed back-to-back.
+    AfterCurrentInstruction {
+        repeat: bool,
+    },
 }
 
 pub struct Emulator {
@@ -161,6 +203,9 @@ pub struct Emulator {
 
     /// Number of ticks remaining until the next instruction is executed
     ticks_to_next_instruction: usize,
+
+    /// State machine for `ei` instructions to enable interrupts after the next instruction
+    pending_enable_interrupts: PendingEnableInterrupt,
 }
 
 impl Emulator {
@@ -174,7 +219,7 @@ impl Emulator {
             tick: 0,
             frame: 0,
             scanline: 0,
-            mode: Mode::OAMScan,
+            mode: Mode::OamScan,
             in_cgb_mode: is_cgb,
             vram: vec![0; machine.vram_size()],
             oam: vec![0; OAM_SIZE],
@@ -184,6 +229,7 @@ impl Emulator {
             io_regs: IoRegisters::init_for_machine(machine),
             ie: IE_INIT,
             ticks_to_next_instruction: 0,
+            pending_enable_interrupts: PendingEnableInterrupt::None,
         }
     }
 
@@ -281,16 +327,21 @@ impl Emulator {
         self.scanline = scanline;
         self.io_regs.write_ly(self.scanline);
 
+        // Interrupt for LYC=LY if necessary
+        if self.io_regs.stat_lyc_interrupt_enabled() && (self.scanline == self.io_regs.lyc()) {
+            self.mark_pending_interrupt(Interrupt::LCDStat);
+        }
+
         if scanline < SCREEN_HEIGHT as u8 {
             // Each scanline starts in OAM scan mode
-            self.mode = Mode::OAMScan;
+            self.set_mode(Mode::OamScan);
             for _ in 0..OAM_SCAN_TICKS {
                 self.run_tick();
             }
 
             // Followed by a draw period. We simplify by making this a fixed length and drawing the
             // entire scanline at once, at the start of the draw period.
-            self.mode = Mode::Draw;
+            self.set_mode(Mode::Draw);
 
             draw_scanline(self, scanline);
 
@@ -299,14 +350,14 @@ impl Emulator {
             }
 
             // Finally enter HBlank for the rest of the scanline
-            self.mode = Mode::HBlank;
+            self.set_mode(Mode::HBlank);
             for _ in 0..HBLANK_TICKS {
                 self.run_tick();
             }
         } else {
             // Enter VBlank at the start of the first scanline after the screen
             if scanline == SCREEN_HEIGHT as u8 {
-                self.mode = Mode::VBlank;
+                self.set_mode(Mode::VBlank);
             }
 
             // VBlank simply ticks along with nothing drawn
@@ -316,14 +367,52 @@ impl Emulator {
         }
     }
 
+    fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+
+        match mode {
+            Mode::HBlank => {
+                if self.io_regs.stat_hblank_interrupt_enabled() {
+                    self.mark_pending_interrupt(Interrupt::LCDStat);
+                }
+            }
+            Mode::VBlank => {
+                self.mark_pending_interrupt(Interrupt::VBlank);
+
+                if self.io_regs.stat_vblank_interrupt_enabled() {
+                    self.mark_pending_interrupt(Interrupt::LCDStat);
+                }
+            }
+            Mode::OamScan => {
+                if self.io_regs.stat_oam_scan_interrupt_enabled() {
+                    self.mark_pending_interrupt(Interrupt::LCDStat);
+                }
+            }
+            Mode::Draw => {}
+        }
+    }
+
+    fn mark_pending_interrupt(&mut self, interrupt: Interrupt) {
+        let current_if = self.io_regs.if_();
+        self.io_regs.write_if_(current_if | interrupt.flag_bit());
+    }
+
     pub fn schedule_next_instruction(&mut self, ticks: usize) {
         self.ticks_to_next_instruction = ticks;
     }
 
     fn run_tick(&mut self) {
-        // Execute an instruction if the previous one has finished
+        // Previous instruction just finished. Either execute the next instruction or handle pending
+        // interrupts.
         if self.ticks_to_next_instruction == 0 {
-            self.execute_instruction();
+            // Handle pending enable interrupt requests from the previous instruction finishing
+            self.advance_pending_enable_interrupts_state();
+
+            if let Some(interrupt) = self.current_interrupt_to_handle() {
+                self.handle_interrupt(interrupt);
+            } else {
+                self.execute_instruction();
+            }
         }
 
         self.ticks_to_next_instruction -= 1;
@@ -448,6 +537,83 @@ impl Emulator {
 
     fn physical_hram_address(&self, addr: Address) -> usize {
         (addr - HRAM_START) as usize
+    }
+
+    pub fn add_pending_enable_interrupts(&mut self) {
+        match self.pending_enable_interrupts {
+            // `ei` is called without any pending requests
+            PendingEnableInterrupt::None => {
+                self.pending_enable_interrupts = PendingEnableInterrupt::AfterNextInstruction;
+            }
+            // `ei` is called while waiting for the previous `ei` to take effect, mark repeating so
+            // that we stay in this state for the next instruction.
+            PendingEnableInterrupt::AfterCurrentInstruction { .. } => {
+                self.pending_enable_interrupts =
+                    PendingEnableInterrupt::AfterCurrentInstruction { repeat: true };
+            }
+            // Already queued
+            PendingEnableInterrupt::AfterNextInstruction => {}
+        }
+    }
+
+    fn advance_pending_enable_interrupts_state(&mut self) {
+        match self.pending_enable_interrupts {
+            PendingEnableInterrupt::None => {}
+            // An instruction just finished so we can enable interrupts now
+            PendingEnableInterrupt::AfterCurrentInstruction { repeat } => {
+                self.regs.set_interrupts_enabled(true);
+
+                // We may be repeating if there were multiple `ei` instructions back-to-back
+                // so stay in this state for one more instruction if so.
+                if repeat {
+                    self.pending_enable_interrupts =
+                        PendingEnableInterrupt::AfterCurrentInstruction { repeat: false };
+                } else {
+                    self.pending_enable_interrupts = PendingEnableInterrupt::None;
+                }
+            }
+            // The `ei` instruction just finished, so we need to wait one more instruction
+            PendingEnableInterrupt::AfterNextInstruction => {
+                self.pending_enable_interrupts =
+                    PendingEnableInterrupt::AfterCurrentInstruction { repeat: false };
+            }
+        }
+    }
+
+    pub fn current_interrupt_to_handle(&self) -> Option<Interrupt> {
+        if !self.regs.interrupts_enabled() {
+            return None;
+        }
+
+        let interrupt_bits = self.ie & self.io_regs.if_() & 0x1F;
+        if interrupt_bits == 0 {
+            return None;
+        }
+
+        if (interrupt_bits & 0x01) != 0 {
+            Some(Interrupt::VBlank)
+        } else if (interrupt_bits & 0x02) != 0 {
+            Some(Interrupt::LCDStat)
+        } else if (interrupt_bits & 0x04) != 0 {
+            Some(Interrupt::Timer)
+        } else if (interrupt_bits & 0x08) != 0 {
+            Some(Interrupt::Serial)
+        } else if (interrupt_bits & 0x10) != 0 {
+            Some(Interrupt::Joypad)
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn handle_interrupt(&mut self, interrupt: Interrupt) {
+        self.schedule_next_instruction(20);
+
+        // Clear the interrupt flag for this interrupt and disable all interrupts while handler runs
+        self.io_regs
+            .write_if_(self.io_regs.if_() & !interrupt.flag_bit());
+        self.regs.set_interrupts_enabled(false);
+
+        self.call_interrupt_handler(interrupt);
     }
 }
 

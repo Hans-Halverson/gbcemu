@@ -1,4 +1,4 @@
-use crate::emulator::Emulator;
+use crate::emulator::{Emulator, Interrupt};
 
 pub mod registers;
 
@@ -12,6 +12,12 @@ impl Emulator {
     fn execute_cb_instruction(&mut self) {
         let opcode = self.read_opcode();
         CB_DISPATCH_TABLE[opcode as usize](self, opcode);
+    }
+
+    pub fn call_interrupt_handler(&mut self, interrupt: Interrupt) {
+        // Treat as a regular call instruction to the interrupt handler address
+        self.push_u16_to_stack(self.regs().pc());
+        self.regs_mut().set_pc(interrupt.handler_address());
     }
 
     /// Read the opcode at PC and advance PC to the following byte.
@@ -774,7 +780,12 @@ define_instruction!(di, fn (emulator, _) {
     emulator.schedule_next_instruction(4);
 });
 
-unimplemented_instruction!(ei);
+define_instruction!(ei, fn(emulator, _) {
+    // Enable interrupts after the next instruction, so set a pending flag
+    emulator.add_pending_enable_interrupts();
+
+    emulator.schedule_next_instruction(4);
+});
 
 define_instruction!(cb_prefix, fn (emulator, _) {
     emulator.execute_cb_instruction();
