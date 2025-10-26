@@ -10,7 +10,7 @@ impl Emulator {
     }
 
     /// Read the opcode at PC and advance PC to the following byte.
-    fn read_opcode(&mut self) -> u8 {
+    fn read_opcode(&mut self) -> Opcode {
         let pc = self.regs().pc();
         let byte = self.read_address(pc);
         self.regs_mut().set_pc(pc + 1);
@@ -47,7 +47,7 @@ impl Emulator {
     /// Get the value of the specified 8-bit register operand.
     ///
     /// `r8_operand` must be in the range 0-7.
-    fn get_r8_operand_value(&self, r8_operand: u8) -> u8 {
+    fn read_r8_operand_value(&self, r8_operand: R8Operand) -> u8 {
         match r8_operand {
             0 => self.regs().b(),
             1 => self.regs().c(),
@@ -64,7 +64,7 @@ impl Emulator {
     /// Write a value to the specified 8-bit register operand.
     ///
     /// `r8_operand` must be in the range 0-7.
-    fn write_r8_operand_value(&mut self, r8_operand: u8, value: u8) {
+    fn write_r8_operand_value(&mut self, r8_operand: R8Operand, value: u8) {
         match r8_operand {
             0 => self.regs_mut().set_b(value),
             1 => self.regs_mut().set_c(value),
@@ -81,7 +81,7 @@ impl Emulator {
     /// Get the value of the specified 16-bit register operand.
     ///
     /// `r16_operand` must be in the range 0-3.
-    fn get_r16_operand_value(&self, r16_operand: u8) -> u16 {
+    fn read_r16_operand_value(&self, r16_operand: R16Operand) -> u16 {
         match r16_operand {
             0 => self.regs().bc(),
             1 => self.regs().de(),
@@ -94,7 +94,7 @@ impl Emulator {
     /// Write a value to the specified 16-bit register operand.
     ///
     /// `r16_operand` must be in the range 0-3.
-    fn write_r16_operand_value(&mut self, r16_operand: u8, value: u16) {
+    fn write_r16_operand_value(&mut self, r16_operand: R16Operand, value: u16) {
         match r16_operand {
             0 => self.regs_mut().set_bc(value),
             1 => self.regs_mut().set_de(value),
@@ -106,7 +106,39 @@ impl Emulator {
 }
 
 type Opcode = u8;
+type R8Operand = u8;
+type R16Operand = u8;
 type InstructionHandler = fn(&mut Emulator, Opcode);
+
+/// An r8 operand encoded in bits 0-2 of the opcode.
+fn low_r8_operand(opcode: Opcode) -> R8Operand {
+    opcode & 0x07
+}
+
+/// An r8 operand encoded in bits 3-5 of the opcode.
+fn high_r8_operand(opcode: Opcode) -> R8Operand {
+    (opcode >> 3) & 0x07
+}
+
+/// All possible r16 operands are encoded in bits 4-5 of the opcode.
+fn r16_operand(opcode: Opcode) -> R16Operand {
+    (opcode >> 4) & 0x03
+}
+
+const R8_OPERAND_HL_MEM: R8Operand = 6;
+
+/// The number of cycles added for this r8 operand. Only reading from address at HL adds cycles.
+fn r8_operand_cycles(r8_operand: R8Operand) -> usize {
+    if r8_operand == R8_OPERAND_HL_MEM {
+        4
+    } else {
+        0
+    }
+}
+
+fn ldh_address(imm8_operand: u8) -> u16 {
+    0xFF00 | (imm8_operand as u16)
+}
 
 macro_rules! define_instruction {
     ($name:ident, fn ($emulator:pat, $opcode:pat) $body:block) => {
@@ -129,17 +161,144 @@ define_instruction!(nop, fn (emulator, _) {
     emulator.schedule_next_instruction(4);
 });
 
-unimplemented_instruction!(ld_r16_imm16);
+define_instruction!(ld_r8_r8, fn (emulator, opcode) {
+    let source_r8_operand = low_r8_operand(opcode);
+    let dest_r8_operand = high_r8_operand(opcode);
 
-unimplemented_instruction!(ld_r16mem_a);
+    let source_r8_value = emulator.read_r8_operand_value(source_r8_operand);
+    emulator.write_r8_operand_value(dest_r8_operand, source_r8_value);
 
-unimplemented_instruction!(ld_a_r16mem);
+    let num_ticks = 4 + r8_operand_cycles(source_r8_operand) + r8_operand_cycles(dest_r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
 
-unimplemented_instruction!(ld_imm16mem_sp);
+define_instruction!(ld_r8_imm8, fn (emulator, opcode) {
+    let r8_operand = high_r8_operand(opcode);
+    let imm8_value = emulator.read_imm8_operand();
+
+    emulator.write_r8_operand_value(r8_operand, imm8_value);
+
+    let num_ticks = 8 + r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(ld_r16_imm16, fn (emulator, opcode) {
+    let r16_operand = r16_operand(opcode);
+    let imm16_value = emulator.read_imm16_operand();
+
+    emulator.write_r16_operand_value(r16_operand, imm16_value);
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(ld_r16mem_a, fn (emulator, opcode) {
+    let r16_operand = r16_operand(opcode);
+    let r16_value = emulator.read_r16_operand_value(r16_operand);
+
+    let accumulator = emulator.regs().a();
+    emulator.write_address(r16_value, accumulator);
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ld_a_r16mem, fn (emulator, opcode) {
+    let r16_operand = r16_operand(opcode);
+    let r16_value = emulator.read_r16_operand_value(r16_operand);
+
+    let r16_mem = emulator.read_address(r16_value);
+    emulator.regs_mut().set_a(r16_mem);
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ld_imm16mem_a, fn(emulator, _) {
+    let imm16 = emulator.read_imm16_operand();
+    let accumulator = emulator.regs().a();
+
+    emulator.write_address(imm16, accumulator);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(ld_a_imm16mem, fn(emulator, _) {
+    let imm16 = emulator.read_imm16_operand();
+    let imm16_mem = emulator.read_address(imm16);
+
+    emulator.regs_mut().set_a(imm16_mem);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(ld_imm16mem_sp, fn (emulator, _) {
+    let imm16 = emulator.read_imm16_operand();
+    let [low, high] = emulator.regs().sp().to_le_bytes();
+
+    emulator.write_address(imm16, low);
+    emulator.write_address(imm16 + 1, high);
+
+    emulator.schedule_next_instruction(20);
+});
+
+define_instruction!(ldh_cmem_a, fn(emulator, _) {
+    let accumulator = emulator.regs().a();
+    let c = emulator.regs().c();
+
+    emulator.write_address(ldh_address(c), accumulator);
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ldh_a_cmem, fn(emulator, _) {
+    let c = emulator.regs().c();
+    let c_mem = emulator.read_address(ldh_address(c));
+
+    emulator.regs_mut().set_a(c_mem);
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ldh_imm8mem_a, fn(emulator, _) {
+    let imm8 = emulator.read_imm8_operand();
+    let accumulator = emulator.regs().a();
+
+    emulator.write_address(ldh_address(imm8), accumulator);
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(ldh_a_imm8mem, fn(emulator, _) {
+    let imm8 = emulator.read_imm8_operand();
+    let imm8_mem = emulator.read_address(ldh_address(imm8));
+
+    emulator.regs_mut().set_a(imm8_mem);
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(ld_hl_sp_imm8, fn (emulator, _) {
+    let imm8_value = emulator.read_imm8_operand() as i8 as i16;
+    let sp = emulator.regs().sp();
+
+    let (result, carried) = sp.overflowing_add_signed(imm8_value);
+
+    emulator.regs_mut().set_zero_flag(false);
+    emulator.regs_mut().set_carry_flag(carried);
+
+    emulator.regs_mut().set_hl(result);
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(ld_sp_hl, fn (emulator, _) {
+    let hl = emulator.regs().hl();
+    emulator.regs_mut().set_sp(hl);
+
+    emulator.schedule_next_instruction(8);
+});
 
 define_instruction!(inc_r16, fn (emulator, operand) {
     let r16_operand = r16_operand(operand);
-    let r16_value = emulator.get_r16_operand_value(r16_operand);
+    let r16_value = emulator.read_r16_operand_value(r16_operand);
 
     let result = r16_value.wrapping_add(1);
     emulator.write_r16_operand_value(r16_operand, result);
@@ -149,7 +308,7 @@ define_instruction!(inc_r16, fn (emulator, operand) {
 
 define_instruction!(dec_r16, fn (emulator, operand) {
     let r16_operand = r16_operand(operand);
-    let r16_value = emulator.get_r16_operand_value(r16_operand);
+    let r16_value = emulator.read_r16_operand_value(r16_operand);
 
     let result = r16_value.wrapping_sub(1);
     emulator.write_r16_operand_value(r16_operand, result);
@@ -159,7 +318,7 @@ define_instruction!(dec_r16, fn (emulator, operand) {
 
 define_instruction!(inc_r8, fn (emulator, operand) {
     let r8_operand = high_r8_operand(operand);
-    let r8_value = emulator.get_r8_operand_value(r8_operand);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
 
     let result = r8_value.wrapping_add(1);
     emulator.write_r8_operand_value(r8_operand, result);
@@ -173,7 +332,7 @@ define_instruction!(inc_r8, fn (emulator, operand) {
 
 define_instruction!(dec_r8, fn (emulator, operand) {
     let r8_operand = high_r8_operand(operand);
-    let r8_value = emulator.get_r8_operand_value(r8_operand);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
 
     let result = r8_value.wrapping_sub(1);
     emulator.write_r8_operand_value(r8_operand, result);
@@ -187,7 +346,7 @@ define_instruction!(dec_r8, fn (emulator, operand) {
 
 define_instruction!(add_hl_r16, fn (emulator, opcode) {
     let r16_operand = r16_operand(opcode);
-    let r16_value = emulator.get_r16_operand_value(r16_operand);
+    let r16_value = emulator.read_r16_operand_value(r16_operand);
     let hl = emulator.regs().hl();
 
     let (result, carried) = hl.overflowing_add(r16_value);
@@ -198,8 +357,6 @@ define_instruction!(add_hl_r16, fn (emulator, opcode) {
 
     emulator.schedule_next_instruction(8);
 });
-
-unimplemented_instruction!(ld_r8_imm8);
 
 unimplemented_instruction!(rlca);
 unimplemented_instruction!(rrca);
@@ -215,35 +372,7 @@ unimplemented_instruction!(jr_cc_imm8);
 
 unimplemented_instruction!(stop);
 
-unimplemented_instruction!(ld_r8_r8);
-
 unimplemented_instruction!(halt);
-
-/// An r8 operand encoded in bits 0-2 of the opcode.
-fn low_r8_operand(opcode: Opcode) -> u8 {
-    opcode & 0x07
-}
-
-/// An r8 operand encoded in bits 3-5 of the opcode.
-fn high_r8_operand(opcode: Opcode) -> u8 {
-    (opcode >> 3) & 0x07
-}
-
-/// All possible r16 operands are encoded in bits 4-5 of the opcode.
-fn r16_operand(opcode: Opcode) -> u8 {
-    (opcode >> 4) & 0x03
-}
-
-const R8_OPERAND_HL_MEM: u8 = 6;
-
-/// The number of cycles added for this r8 operand. Only reading from address at HL adds cycles.
-fn r8_operand_cycles(r8_operand: u8) -> usize {
-    if r8_operand == R8_OPERAND_HL_MEM {
-        4
-    } else {
-        0
-    }
-}
 
 /// Any arithmetic operation between the accumulator and an r8 operand.
 fn arithmetic_a_r8_instruction(
@@ -252,7 +381,7 @@ fn arithmetic_a_r8_instruction(
     operation: fn(&mut Emulator, u8, u8) -> u8,
 ) {
     let r8_operand = low_r8_operand(opcode);
-    let r8_value = emulator.get_r8_operand_value(r8_operand);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
     let acc = emulator.regs().a();
 
     let result = operation(emulator, acc, r8_value);
@@ -322,7 +451,7 @@ define_instruction!(or_a_r8, fn (emulator, opcode) {
 // Identical to sub_a_r8, but does not write the result to the accumulator.
 define_instruction!(cp_a_r8, fn (emulator, opcode) {
     let r8_operand = low_r8_operand(opcode);
-    let r8_value = emulator.get_r8_operand_value(r8_operand);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
     let acc = emulator.regs().a();
 
     let (result, carried) = acc.overflowing_sub(r8_value);
@@ -440,13 +569,6 @@ unimplemented_instruction!(push_af);
 
 unimplemented_instruction!(cb_prefix);
 
-unimplemented_instruction!(ldh_cmem_a);
-unimplemented_instruction!(ldh_imm8mem_a);
-unimplemented_instruction!(ld_imm16mem_a);
-unimplemented_instruction!(ldh_a_cmem);
-unimplemented_instruction!(ldh_a_imm8mem);
-unimplemented_instruction!(ld_a_imm16mem);
-
 define_instruction!(add_sp_imm8, fn (emulator, _) {
     let signed_operand = emulator.read_imm8_operand() as i8 as i16;
     let sp = emulator.regs().sp();
@@ -459,9 +581,6 @@ define_instruction!(add_sp_imm8, fn (emulator, _) {
 
     emulator.schedule_next_instruction(16);
 });
-
-unimplemented_instruction!(ld_hl_sp_imm8);
-unimplemented_instruction!(ld_sp_hl);
 
 define_instruction!(di, fn (emulator, _) {
     emulator.regs_mut().set_interrupts_enabled(false);
