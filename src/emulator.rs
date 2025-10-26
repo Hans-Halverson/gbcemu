@@ -103,7 +103,7 @@ const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
 const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
 
 #[derive(Clone, Copy)]
-enum Mode {
+pub enum Mode {
     /// Mode 0: Move to the next scanline
     HBlank,
     /// Mode 1: Move back to start of screen
@@ -114,9 +114,20 @@ enum Mode {
     Draw,
 }
 
+impl Mode {
+    pub fn byte_value(&self) -> u8 {
+        match self {
+            Mode::HBlank => 0,
+            Mode::VBlank => 1,
+            Mode::OamScan => 2,
+            Mode::Draw => 3,
+        }
+    }
+}
+
 pub enum Interrupt {
     VBlank,
-    LCDStat,
+    LcdStat,
     Timer,
     Serial,
     Joypad,
@@ -126,7 +137,7 @@ impl Interrupt {
     fn flag_bit(&self) -> u8 {
         match self {
             Interrupt::VBlank => 0x01,
-            Interrupt::LCDStat => 0x02,
+            Interrupt::LcdStat => 0x02,
             Interrupt::Timer => 0x04,
             Interrupt::Serial => 0x08,
             Interrupt::Joypad => 0x10,
@@ -136,7 +147,7 @@ impl Interrupt {
     pub fn handler_address(&self) -> Address {
         match self {
             Interrupt::VBlank => 0x40,
-            Interrupt::LCDStat => 0x48,
+            Interrupt::LcdStat => 0x48,
             Interrupt::Timer => 0x50,
             Interrupt::Serial => 0x58,
             Interrupt::Joypad => 0x60,
@@ -233,8 +244,12 @@ impl Emulator {
         }
     }
 
-    pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
-        self.output_buffer.clone()
+    pub fn scanline(&self) -> u8 {
+        self.scanline
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 
     pub fn oam(&self) -> &[u8] {
@@ -251,6 +266,14 @@ impl Emulator {
 
     pub fn io_regs(&self) -> &IoRegisters {
         &self.io_regs
+    }
+
+    pub fn io_regs_mut(&mut self) -> &mut IoRegisters {
+        &mut self.io_regs
+    }
+
+    pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
+        self.output_buffer.clone()
     }
 
     /// Run the emulator at the GameBoy's native framerate
@@ -325,11 +348,10 @@ impl Emulator {
 
     fn run_scanline(&mut self, scanline: u8) {
         self.scanline = scanline;
-        self.io_regs.write_ly(self.scanline);
 
-        // Interrupt for LYC=LY if necessary
-        if self.io_regs.stat_lyc_interrupt_enabled() && (self.scanline == self.io_regs.lyc()) {
-            self.mark_pending_interrupt(Interrupt::LCDStat);
+        // Resust interrupt for LYC=LY if necessary
+        if self.is_stat_lyc_interrupt_enabled() && (self.scanline == self.lyc()) {
+            self.request_interrupt(Interrupt::LcdStat);
         }
 
         if scanline < SCREEN_HEIGHT as u8 {
@@ -372,29 +394,29 @@ impl Emulator {
 
         match mode {
             Mode::HBlank => {
-                if self.io_regs.stat_hblank_interrupt_enabled() {
-                    self.mark_pending_interrupt(Interrupt::LCDStat);
+                if self.is_stat_hblank_interrupt_enabled() {
+                    self.request_interrupt(Interrupt::LcdStat);
                 }
             }
             Mode::VBlank => {
-                self.mark_pending_interrupt(Interrupt::VBlank);
+                self.request_interrupt(Interrupt::VBlank);
 
-                if self.io_regs.stat_vblank_interrupt_enabled() {
-                    self.mark_pending_interrupt(Interrupt::LCDStat);
+                if self.is_stat_vblank_interrupt_enabled() {
+                    self.request_interrupt(Interrupt::LcdStat);
                 }
             }
             Mode::OamScan => {
-                if self.io_regs.stat_oam_scan_interrupt_enabled() {
-                    self.mark_pending_interrupt(Interrupt::LCDStat);
+                if self.is_stat_oam_scan_interrupt_enabled() {
+                    self.request_interrupt(Interrupt::LcdStat);
                 }
             }
             Mode::Draw => {}
         }
     }
 
-    fn mark_pending_interrupt(&mut self, interrupt: Interrupt) {
-        let current_if = self.io_regs.if_();
-        self.io_regs.write_if_(current_if | interrupt.flag_bit());
+    pub fn request_interrupt(&mut self, interrupt: Interrupt) {
+        let current_if = self.if_reg();
+        self.write_if_reg(current_if | interrupt.flag_bit());
     }
 
     pub fn schedule_next_instruction(&mut self, ticks: usize) {
@@ -453,7 +475,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr]
         } else if addr < IO_REGISTERS_END {
-            self.io_regs.read_register(addr)
+            self.read_io_register(addr)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr]
@@ -492,7 +514,7 @@ impl Emulator {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr] = value;
         } else if addr < IO_REGISTERS_END {
-            self.io_regs.write_register(addr, value)
+            self.write_io_register(addr, value)
         } else if addr < HRAM_END {
             let physical_addr = self.physical_hram_address(addr);
             self.hram[physical_addr] = value;
@@ -505,7 +527,7 @@ impl Emulator {
 
     fn physical_vram_bank_address(&self, addr: Address) -> usize {
         let bank_num = if self.in_cgb_mode {
-            (self.io_regs.vbk() & 0x01) as usize
+            (self.vbk() & 0x01) as usize
         } else {
             0
         };
@@ -520,7 +542,7 @@ impl Emulator {
     fn second_wram_bank_num(&self) -> usize {
         if self.in_cgb_mode {
             // Cannot access bank 0, instead return bank 1
-            (self.io_regs.wbk() & 0x7).max(1) as usize
+            (self.wbk() & 0x7).max(1) as usize
         } else {
             1
         }
@@ -585,7 +607,7 @@ impl Emulator {
             return None;
         }
 
-        let interrupt_bits = self.ie & self.io_regs.if_() & 0x1F;
+        let interrupt_bits = self.ie & self.if_reg() & 0x1F;
         if interrupt_bits == 0 {
             return None;
         }
@@ -593,7 +615,7 @@ impl Emulator {
         if (interrupt_bits & 0x01) != 0 {
             Some(Interrupt::VBlank)
         } else if (interrupt_bits & 0x02) != 0 {
-            Some(Interrupt::LCDStat)
+            Some(Interrupt::LcdStat)
         } else if (interrupt_bits & 0x04) != 0 {
             Some(Interrupt::Timer)
         } else if (interrupt_bits & 0x08) != 0 {
@@ -609,8 +631,7 @@ impl Emulator {
         self.schedule_next_instruction(20);
 
         // Clear the interrupt flag for this interrupt and disable all interrupts while handler runs
-        self.io_regs
-            .write_if_(self.io_regs.if_() & !interrupt.flag_bit());
+        self.write_if_reg(self.if_reg() & !interrupt.flag_bit());
         self.regs.set_interrupts_enabled(false);
 
         self.call_interrupt_handler(interrupt);
