@@ -103,11 +103,49 @@ impl Emulator {
             _ => unreachable!("Invalid r16 operand"),
         }
     }
+
+    /// Pop a 16-bit value from the stack. Value is stored in little endian order.
+    fn pop_u16_from_stack(&mut self) -> u16 {
+        let sp = self.regs().sp();
+
+        let low = self.read_address(sp) as u16;
+        let high = self.read_address(sp.wrapping_add(1)) as u16;
+        let result = (high << 8) | low;
+
+        let new_sp = sp.wrapping_add(2);
+        self.regs_mut().set_sp(new_sp);
+
+        result
+    }
+
+    /// Push a 16-bit value onto the stack. Value is stored in little endian order.
+    fn push_u16_to_stack(&mut self, value: u16) {
+        let sp = self.regs().sp();
+        let [low, high] = value.to_le_bytes();
+
+        let new_sp = sp.wrapping_sub(2);
+
+        self.write_address(new_sp.wrapping_add(1), high);
+        self.write_address(new_sp, low);
+
+        self.regs_mut().set_sp(new_sp);
+    }
+
+    fn is_cc_met(&self, cc: CcOperand) -> bool {
+        match cc {
+            0 => !self.regs().zero_flag(),
+            1 => self.regs().zero_flag(),
+            2 => !self.regs().carry_flag(),
+            3 => self.regs().carry_flag(),
+            _ => unreachable!("Invalid condition code operand"),
+        }
+    }
 }
 
 type Opcode = u8;
 type R8Operand = u8;
 type R16Operand = u8;
+type CcOperand = u8;
 type InstructionHandler = fn(&mut Emulator, Opcode);
 
 /// An r8 operand encoded in bits 0-2 of the opcode.
@@ -123,6 +161,11 @@ fn high_r8_operand(opcode: Opcode) -> R8Operand {
 /// All possible r16 operands are encoded in bits 4-5 of the opcode.
 fn r16_operand(opcode: Opcode) -> R16Operand {
     (opcode >> 4) & 0x03
+}
+
+/// A condition code operand encoded in bits 3-4 of the opcode.
+fn cc_operand(opcode: Opcode) -> CcOperand {
+    (opcode >> 3) & 0x03
 }
 
 const R8_OPERAND_HL_MEM: R8Operand = 6;
@@ -367,11 +410,7 @@ unimplemented_instruction!(cpl);
 unimplemented_instruction!(scf);
 unimplemented_instruction!(ccf);
 
-unimplemented_instruction!(jr_imm8);
-unimplemented_instruction!(jr_cc_imm8);
-
 unimplemented_instruction!(stop);
-
 unimplemented_instruction!(halt);
 
 /// Any arithmetic operation between the accumulator and an r8 operand.
@@ -545,10 +584,29 @@ define_instruction!(cp_a_imm8, fn (emulator, _) {
     emulator.schedule_next_instruction(8);
 });
 
-unimplemented_instruction!(ret_cc);
-unimplemented_instruction!(ret);
-unimplemented_instruction!(reti);
-unimplemented_instruction!(jp_cond_imm16);
+define_instruction!(jr_imm8, fn(emulator, _) {
+    let signed_offset = emulator.read_imm8_operand() as i8 as i16;
+    let pc = emulator.regs().pc();
+
+    emulator.regs_mut().set_pc(pc.wrapping_add_signed(signed_offset));
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(jr_cc_imm8, fn(emulator, opcode) {
+    let signed_offset = emulator.read_imm8_operand() as i8 as i16;
+    let opcode = opcode;
+    let pc = emulator.regs().pc();
+
+    if !emulator.is_cc_met(cc_operand(opcode)) {
+        emulator.schedule_next_instruction(8);
+        return;
+    }
+
+    emulator.regs_mut().set_pc(pc.wrapping_add_signed(signed_offset));
+
+    emulator.schedule_next_instruction(12);
+});
 
 define_instruction!(jp_imm16, fn (emulator, _) {
     let imm16 = emulator.read_imm16_operand();
@@ -557,15 +615,126 @@ define_instruction!(jp_imm16, fn (emulator, _) {
     emulator.schedule_next_instruction(16);
 });
 
-unimplemented_instruction!(jp_hl);
-unimplemented_instruction!(call_cc_imm16);
-unimplemented_instruction!(call_imm16);
-unimplemented_instruction!(rst_tgt);
+define_instruction!(jp_cond_imm16, fn (emulator, opcode) {
+    let imm16 = emulator.read_imm16_operand();
+    let cc = cc_operand(opcode);
 
-unimplemented_instruction!(pop_r16);
-unimplemented_instruction!(pop_af);
-unimplemented_instruction!(push_r16);
-unimplemented_instruction!(push_af);
+    if !emulator.is_cc_met(cc) {
+        emulator.schedule_next_instruction(12);
+        return;
+    }
+
+    emulator.regs_mut().set_pc(imm16);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(jp_hl, fn (emulator, _) {
+    let hl = emulator.regs().hl();
+    emulator.regs_mut().set_pc(hl);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(ret, fn (emulator, _) {
+    let saved_pc = emulator.pop_u16_from_stack();
+    emulator.regs_mut().set_pc(saved_pc);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(ret_cc, fn (emulator, opcode) {
+    let cc = cc_operand(opcode);
+
+    if !emulator.is_cc_met(cc) {
+        emulator.schedule_next_instruction(8);
+        return;
+    }
+
+    let saved_pc = emulator.pop_u16_from_stack();
+    emulator.regs_mut().set_pc(saved_pc);
+
+    emulator.schedule_next_instruction(20);
+});
+
+define_instruction!(reti, fn (emulator, _) {
+    let saved_pc = emulator.pop_u16_from_stack();
+    emulator.regs_mut().set_pc(saved_pc);
+
+    // Should immediately enable interrupts after returning
+    emulator.regs_mut().set_interrupts_enabled(true);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(call_imm16, fn(emulator, _) {
+    let imm16 = emulator.read_imm16_operand();
+
+    // Push the current PC to the stack then set PC to the operand
+    emulator.push_u16_to_stack(emulator.regs().pc());
+    emulator.regs_mut().set_pc(imm16);
+
+    emulator.schedule_next_instruction(24);
+});
+
+define_instruction!(call_cc_imm16, fn(emulator, opcode) {
+    let imm16 = emulator.read_imm16_operand();
+    let cc = cc_operand(opcode);
+
+    if !emulator.is_cc_met(cc) {
+        emulator.schedule_next_instruction(12);
+        return;
+    }
+
+    // Push the current PC to the stack then set PC to the operand
+    emulator.push_u16_to_stack(emulator.regs().pc());
+    emulator.regs_mut().set_pc(imm16);
+
+    emulator.schedule_next_instruction(24);
+});
+
+define_instruction!(rst_tgt, fn(emulator, opcode) {
+    let target_address = opcode & 0x38;
+
+    // Push the current PC to the stack then set PC to the target address
+    emulator.push_u16_to_stack(emulator.regs().pc());
+    emulator.regs_mut().set_pc(target_address as u16);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(pop_r16, fn(emulator, opcode) {
+    let r16_operand = r16_operand(opcode);
+    let popped_value = emulator.pop_u16_from_stack();
+
+    emulator.write_r16_operand_value(r16_operand, popped_value);
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(pop_af, fn(emulator, _) {
+    let popped_value = emulator.pop_u16_from_stack();
+
+    emulator.regs_mut().set_af(popped_value);
+
+    emulator.schedule_next_instruction(12);
+});
+
+define_instruction!(push_r16, fn(emulator, opcode) {
+    let r16_operand = r16_operand(opcode);
+    let r16_value = emulator.read_r16_operand_value(r16_operand);
+
+    emulator.push_u16_to_stack(r16_value);
+
+    emulator.schedule_next_instruction(16);
+});
+
+define_instruction!(push_af, fn(emulator, _) {
+    let af = emulator.regs().af();
+    emulator.push_u16_to_stack(af);
+
+    emulator.schedule_next_instruction(16);
+});
 
 unimplemented_instruction!(cb_prefix);
 

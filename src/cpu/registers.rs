@@ -158,6 +158,19 @@ impl Registers {
         self.hl = value.to_be_bytes();
     }
 
+    pub fn af(&self) -> u16 {
+        let flag_byte = ((self.carry_flag as u16) << 4) | ((self.zero_flag as u16) << 7);
+        ((self.a as u16) << 8) | flag_byte
+    }
+
+    pub fn set_af(&mut self, value: u16) {
+        let [a, flag_byte] = value.to_be_bytes();
+
+        self.a = a;
+        self.zero_flag = (flag_byte & 0x80) != 0;
+        self.carry_flag = (flag_byte & 0x10) != 0;
+    }
+
     pub fn zero_flag(&self) -> bool {
         self.zero_flag
     }
