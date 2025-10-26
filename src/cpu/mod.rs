@@ -357,6 +357,46 @@ define_instruction!(ld_hl_sp_imm8, fn (emulator, _) {
     emulator.schedule_next_instruction(12);
 });
 
+define_instruction!(ld_a_hli, fn (emulator, _) {
+    let hl = emulator.regs().hl();
+    let hl_mem = emulator.read_address(hl);
+
+    emulator.regs_mut().set_a(hl_mem);
+    emulator.regs_mut().set_hl(hl.wrapping_add(1));
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ld_a_hld, fn (emulator, _) {
+    let hl = emulator.regs().hl();
+    let hl_mem = emulator.read_address(hl);
+
+    emulator.regs_mut().set_a(hl_mem);
+    emulator.regs_mut().set_hl(hl.wrapping_sub(1));
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ld_hli_a, fn (emulator, _) {
+    let hl = emulator.regs().hl();
+    let accumulator = emulator.regs().a();
+
+    emulator.write_address(hl, accumulator);
+    emulator.regs_mut().set_hl(hl.wrapping_add(1));
+
+    emulator.schedule_next_instruction(8);
+});
+
+define_instruction!(ld_hld_a, fn (emulator, _) {
+    let hl = emulator.regs().hl();
+    let accumulator = emulator.regs().a();
+
+    emulator.write_address(hl, accumulator);
+    emulator.regs_mut().set_hl(hl.wrapping_sub(1));
+
+    emulator.schedule_next_instruction(8);
+});
+
 define_instruction!(ld_sp_hl, fn (emulator, _) {
     let hl = emulator.regs().hl();
     emulator.regs_mut().set_sp(hl);
@@ -867,8 +907,8 @@ const DISPATCH_TABLE: [InstructionHandler; 256] = [
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     /* 0x00 */ nop,            ld_r16_imm16,   ld_r16mem_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rlca,           ld_imm16mem_sp, add_hl_r16,     ld_a_r16mem,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rrca,
     /* 0x10 */ stop,           ld_r16_imm16,   ld_r16mem_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rla,            jr_imm8,        add_hl_r16,     ld_a_r16mem,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rra,
-    /* 0x20 */ jr_cc_imm8,     ld_r16_imm16,   ld_r16mem_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     daa,            jr_cc_imm8,     add_hl_r16,     ld_a_r16mem,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     cpl,
-    /* 0x30 */ jr_cc_imm8,     ld_r16_imm16,   ld_r16mem_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     scf,            jr_cc_imm8,     add_hl_r16,     ld_a_r16mem,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     ccf,
+    /* 0x20 */ jr_cc_imm8,     ld_r16_imm16,   ld_hli_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     daa,            jr_cc_imm8,     add_hl_r16,     ld_a_hli,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     cpl,
+    /* 0x30 */ jr_cc_imm8,     ld_r16_imm16,   ld_hld_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     scf,            jr_cc_imm8,     add_hl_r16,     ld_a_hld,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     ccf,
     /* 0x40 */ ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,
     /* 0x50 */ ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,
     /* 0x60 */ ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,

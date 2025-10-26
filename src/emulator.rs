@@ -427,9 +427,6 @@ impl Emulator {
         // Previous instruction just finished. Either execute the next instruction or handle pending
         // interrupts.
         if self.ticks_to_next_instruction == 0 {
-            // Handle pending enable interrupt requests from the previous instruction finishing
-            self.advance_pending_enable_interrupts_state();
-
             if let Some(interrupt) = self.current_interrupt_to_handle() {
                 self.handle_interrupt(interrupt);
             } else {
@@ -437,8 +434,13 @@ impl Emulator {
             }
         }
 
-        self.ticks_to_next_instruction -= 1;
         self.tick += 1;
+        self.ticks_to_next_instruction -= 1;
+
+        // Advance the "enable interrupt state" from this instruction finishing
+        if self.ticks_to_next_instruction == 0 {
+            self.advance_pending_enable_interrupts_state();
+        }
     }
 
     pub fn write_color(&self, x: u8, y: u8, color: Color) {
