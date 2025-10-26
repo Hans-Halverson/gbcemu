@@ -428,14 +428,18 @@ impl Emulator {
         (addr - FIRST_WORK_RAM_BANK_START) as usize
     }
 
-    /// Cannot access bank 0, instead return bank 1
-    fn wram_bank_num(&self) -> usize {
-        self.io_regs.wbk().max(1) as usize
+    fn second_wram_bank_num(&self) -> usize {
+        if self.in_cgb_mode {
+            // Cannot access bank 0, instead return bank 1
+            (self.io_regs.wbk() & 0x7).max(1) as usize
+        } else {
+            1
+        }
     }
 
     fn physical_second_work_ram_bank_address(&self, addr: Address) -> usize {
         (addr - SECOND_WORK_RAM_BANK_START) as usize
-            + SINGLE_WORK_RAM_BANK_SIZE * self.wram_bank_num()
+            + SINGLE_WORK_RAM_BANK_SIZE * self.second_wram_bank_num()
     }
 
     fn physical_oam_address(&self, addr: Address) -> usize {

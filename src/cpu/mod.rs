@@ -9,6 +9,11 @@ impl Emulator {
         DISPATCH_TABLE[opcode as usize](self, opcode);
     }
 
+    fn execute_cb_instruction(&mut self) {
+        let opcode = self.read_opcode();
+        CB_DISPATCH_TABLE[opcode as usize](self, opcode);
+    }
+
     /// Read the opcode at PC and advance PC to the following byte.
     fn read_opcode(&mut self) -> Opcode {
         let pc = self.regs().pc();
@@ -168,12 +173,24 @@ fn cc_operand(opcode: Opcode) -> CcOperand {
     (opcode >> 3) & 0x03
 }
 
+/// A bit index operand encoded in bits 3-5 of the opcode.
+fn bit_index_operand(opcode: Opcode) -> u8 {
+    (opcode >> 3) & 0x07
+}
+
 const R8_OPERAND_HL_MEM: R8Operand = 6;
 
-/// The number of cycles added for this r8 operand. Only reading from address at HL adds cycles.
-fn r8_operand_cycles(r8_operand: R8Operand) -> usize {
+fn single_r8_operand_cycles(r8_operand: R8Operand) -> usize {
     if r8_operand == R8_OPERAND_HL_MEM {
         4
+    } else {
+        0
+    }
+}
+
+fn double_r8_operand_cycles(r8_operand: R8Operand) -> usize {
+    if r8_operand == R8_OPERAND_HL_MEM {
+        8
     } else {
         0
     }
@@ -211,7 +228,9 @@ define_instruction!(ld_r8_r8, fn (emulator, opcode) {
     let source_r8_value = emulator.read_r8_operand_value(source_r8_operand);
     emulator.write_r8_operand_value(dest_r8_operand, source_r8_value);
 
-    let num_ticks = 4 + r8_operand_cycles(source_r8_operand) + r8_operand_cycles(dest_r8_operand);
+    let num_ticks = 4
+        + single_r8_operand_cycles(source_r8_operand)
+        + single_r8_operand_cycles(dest_r8_operand);
     emulator.schedule_next_instruction(num_ticks);
 });
 
@@ -221,7 +240,7 @@ define_instruction!(ld_r8_imm8, fn (emulator, opcode) {
 
     emulator.write_r8_operand_value(r8_operand, imm8_value);
 
-    let num_ticks = 8 + r8_operand_cycles(r8_operand);
+    let num_ticks = 8 + single_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
 });
 
@@ -369,7 +388,7 @@ define_instruction!(inc_r8, fn (emulator, operand) {
     // Carry flag is not set
     emulator.set_zero_flag_for_value(result);
 
-    let num_ticks = 4 + (r8_operand_cycles(r8_operand) * 2);
+    let num_ticks = 4 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
 });
 
@@ -383,7 +402,7 @@ define_instruction!(dec_r8, fn (emulator, operand) {
     // Carry flag is not set
     emulator.set_zero_flag_for_value(result);
 
-    let num_ticks = 4 + (r8_operand_cycles(r8_operand) * 2);
+    let num_ticks = 4 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
 });
 
@@ -428,7 +447,7 @@ fn arithmetic_a_r8_instruction(
     emulator.regs_mut().set_a(result);
     emulator.set_zero_flag_for_value(result);
 
-    let num_ticks = 4 + r8_operand_cycles(r8_operand);
+    let num_ticks = 4 + single_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
 }
 
@@ -497,7 +516,7 @@ define_instruction!(cp_a_r8, fn (emulator, opcode) {
     emulator.regs_mut().set_carry_flag(carried);
     emulator.set_zero_flag_for_value(result);
 
-    let num_ticks = 4 + r8_operand_cycles(r8_operand);
+    let num_ticks = 4 + single_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
 });
 
@@ -736,8 +755,6 @@ define_instruction!(push_af, fn(emulator, _) {
     emulator.schedule_next_instruction(16);
 });
 
-unimplemented_instruction!(cb_prefix);
-
 define_instruction!(add_sp_imm8, fn (emulator, _) {
     let signed_operand = emulator.read_imm8_operand() as i8 as i16;
     let sp = emulator.regs().sp();
@@ -758,6 +775,73 @@ define_instruction!(di, fn (emulator, _) {
 });
 
 unimplemented_instruction!(ei);
+
+define_instruction!(cb_prefix, fn (emulator, _) {
+    emulator.execute_cb_instruction();
+});
+
+unimplemented_instruction!(rlc);
+unimplemented_instruction!(rrc);
+unimplemented_instruction!(rl);
+unimplemented_instruction!(rr);
+unimplemented_instruction!(sla);
+unimplemented_instruction!(sra);
+unimplemented_instruction!(srl);
+
+define_instruction!(swap, fn (emulator, opcode) {
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+
+    let high_nibble = r8_value >> 4;
+    let low_nibble = r8_value & 0x0F;
+
+    let result = (low_nibble << 4) | high_nibble;
+    emulator.write_r8_operand_value(r8_operand, result);
+
+    emulator.set_zero_flag_for_value(result);
+    emulator.regs_mut().set_carry_flag(false);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(bit, fn (emulator, opcode) {
+    let r8_operand = low_r8_operand(opcode);
+    let bit_index = bit_index_operand(opcode);
+
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let is_bit_zero = r8_value & (1 << bit_index) == 0;
+    emulator.regs_mut().set_zero_flag(is_bit_zero);
+
+    let num_ticks = 8 + single_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(res, fn (emulator, opcode) {
+    let r8_operand = low_r8_operand(opcode);
+    let bit_index = bit_index_operand(opcode);
+
+    // Set the bit at the given index to 0
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let result = r8_value & !(1 << bit_index);
+    emulator.write_r8_operand_value(r8_operand, result);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(set, fn (emulator, opcode) {
+    let r8_operand = low_r8_operand(opcode);
+    let bit_index = bit_index_operand(opcode);
+
+    // Set the bit at the given index to 1
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let result = r8_value | (1 << bit_index);
+    emulator.write_r8_operand_value(r8_operand, result);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
 
 // An opcode that does not match any valid instruction.
 define_instruction!(invalid, fn (_, opcode) {
@@ -786,4 +870,25 @@ const DISPATCH_TABLE: [InstructionHandler; 256] = [
     /* 0xD0 */ ret_cc,         pop_r16,        jp_cond_imm16,  invalid,        call_cc_imm16,  push_r16,       sub_a_imm8,     rst_tgt,        ret_cc,         reti,           jp_cond_imm16,  invalid,        call_cc_imm16,  invalid,        sbc_a_imm8,     rst_tgt,
     /* 0xE0 */ ldh_imm8mem_a,  pop_r16,        ldh_cmem_a,     invalid,        invalid,        push_r16,       and_a_imm8,     rst_tgt,        add_sp_imm8,    jp_hl,          ld_imm16mem_a,  invalid,        invalid,        invalid,        xor_a_imm8,     rst_tgt,
     /* 0xF0 */ ldh_a_imm8mem,  pop_af,         ldh_a_cmem,     di,             invalid,        push_af,        or_a_imm8,      rst_tgt,        ld_hl_sp_imm8,  ld_sp_hl,       ld_a_imm16mem,  ei,             invalid,        invalid,        cp_a_imm8,      rst_tgt,
+];
+
+#[rustfmt::skip]
+const CB_DISPATCH_TABLE: [InstructionHandler; 256] = [
+    ////////// 0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07  0x08  0x09  0x0A  0x0B  0x0C  0x0D  0x0E  0x0F
+    /* 0x00 */ rlc,  rlc,  rlc,  rlc,  rlc,  rlc,  rlc,  rlc,  rrc,  rrc,  rrc,  rrc,  rrc,  rrc,  rrc,  rrc,
+    /* 0x10 */ rl,   rl,   rl,   rl,   rl,   rl,   rl,   rl,   rr,   rr,   rr,   rr,   rr,   rr,   rr,   rr,
+    /* 0x20 */ sla,  sla,  sla,  sla,  sla,  sla,  sla,  sla,  sra,  sra,  sra,  sra,  sra,  sra,  sra,  sra,
+    /* 0x30 */ swap, swap, swap, swap, swap, swap, swap, swap, srl,  srl,  srl,  srl,  srl,  srl,  srl,  srl,
+    /* 0x40 */ bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,
+    /* 0x50 */ bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,
+    /* 0x60 */ bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,
+    /* 0x70 */ bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,  bit,
+    /* 0x80 */ res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,
+    /* 0x90 */ res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,
+    /* 0xA0 */ res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,
+    /* 0xB0 */ res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,  res,
+    /* 0xC0 */ set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,
+    /* 0xD0 */ set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,
+    /* 0xE0 */ set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,
+    /* 0xF0 */ set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,  set,
 ];
