@@ -71,8 +71,18 @@ impl SharedOutputBuffer {
     }
 }
 
+/// The default grayscale color palette.
+const SCREEN_COLOR_PALETTE_GRAYSCALE: [Color32; 4] = [
+    Color32::from_rgb(0xFF, 0xFF, 0xFF),
+    Color32::from_rgb(0xAA, 0xAA, 0xAA),
+    Color32::from_rgb(0x55, 0x55, 0x55),
+    Color32::from_rgb(0x00, 0x00, 0x00),
+];
+
 /// A green color palette for the original GameBoy screen.
-const SCREEN_COLOR_PALETTE: [Color32; 4] = [
+/// TODO: Configure screen color palette via options.
+#[allow(unused)]
+const SCREEN_COLOR_PALETTE_GREEN: [Color32; 4] = [
     Color32::from_rgb(0x9B, 0xBC, 0x0F),
     Color32::from_rgb(0x8B, 0xAC, 0x0F),
     Color32::from_rgb(0x30, 0x62, 0x30),
@@ -98,6 +108,9 @@ const OAM_SCAN_TICKS: usize = 80;
 const DRAW_TICKS: usize = 172;
 
 const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
+
+/// Total number of ticks to complete an OAM DMA transfer
+const OAM_DMA_TRANSFER_TICKS: usize = 640;
 
 /// Nanoseconds in real time per frame
 const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
@@ -153,6 +166,23 @@ impl Interrupt {
             Interrupt::Joypad => 0x60,
         }
     }
+
+    /// Return the highest priority interrupt in the bit string from IE or IF.
+    fn for_bits(interrupt_bits: u8) -> Self {
+        if (interrupt_bits & 0x01) != 0 {
+            Interrupt::VBlank
+        } else if (interrupt_bits & 0x02) != 0 {
+            Interrupt::LcdStat
+        } else if (interrupt_bits & 0x04) != 0 {
+            Interrupt::Timer
+        } else if (interrupt_bits & 0x08) != 0 {
+            Interrupt::Serial
+        } else if (interrupt_bits & 0x10) != 0 {
+            Interrupt::Joypad
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 /// The `ei` instruction enables interrupts after the next instruction completes. Use a small state
@@ -164,6 +194,13 @@ enum PendingEnableInterrupt {
     AfterCurrentInstruction {
         repeat: bool,
     },
+}
+
+struct OamDmaTransfer {
+    /// The source address which data is copied from into OAM
+    source_address: Address,
+    /// The number of ticks until this transfer is complete
+    ticks_remaining: usize,
 }
 
 pub struct Emulator {
@@ -217,6 +254,12 @@ pub struct Emulator {
 
     /// State machine for `ei` instructions to enable interrupts after the next instruction
     pending_enable_interrupts: PendingEnableInterrupt,
+
+    /// The current OAM DMA transfer, if one is in progress
+    current_oam_dma_transfer: Option<OamDmaTransfer>,
+
+    /// Whether the CPU is currently halted
+    is_cpu_halted: bool,
 }
 
 impl Emulator {
@@ -241,6 +284,8 @@ impl Emulator {
             ie: IE_INIT,
             ticks_to_next_instruction: 0,
             pending_enable_interrupts: PendingEnableInterrupt::None,
+            current_oam_dma_transfer: None,
+            is_cpu_halted: false,
         }
     }
 
@@ -270,6 +315,10 @@ impl Emulator {
 
     pub fn io_regs_mut(&mut self) -> &mut IoRegisters {
         &mut self.io_regs
+    }
+
+    pub fn halt_cpu(&mut self) {
+        self.is_cpu_halted = true;
     }
 
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
@@ -424,30 +473,41 @@ impl Emulator {
     }
 
     fn run_tick(&mut self) {
-        // Previous instruction just finished. Either execute the next instruction or handle pending
-        // interrupts.
-        if self.ticks_to_next_instruction == 0 {
-            if let Some(interrupt) = self.current_interrupt_to_handle() {
-                self.handle_interrupt(interrupt);
-            } else {
-                self.execute_instruction();
+        // Ready for next instruction. Either execute the next instruction or an interrupt handler.
+        'handled: {
+            if self.ticks_to_next_instruction == 0 {
+                let interrupt_bits = self.interrupt_bits();
+                if interrupt_bits != 0 {
+                    // A pending interrupts resumes a halted CPU, even if IME is disabled and
+                    // interrup won't actually be handled.
+                    self.is_cpu_halted = false;
+
+                    if self.regs().interrupts_enabled() {
+                        self.handle_interrupt(Interrupt::for_bits(interrupt_bits));
+                        break 'handled;
+                    }
+                }
+
+                if !self.is_cpu_halted {
+                    self.execute_instruction();
+                    break 'handled;
+                }
             }
         }
 
         self.tick += 1;
-        self.ticks_to_next_instruction -= 1;
+        self.ticks_to_next_instruction = self.ticks_to_next_instruction.saturating_sub(1);
 
-        // Advance the "enable interrupt state" from this instruction finishing
-        if self.ticks_to_next_instruction == 0 {
-            self.advance_pending_enable_interrupts_state();
-        }
+        // Advance states at the end of the tick
+        self.advance_pending_enable_interrupts_state();
+        self.advance_oam_dma_transfer_state();
     }
 
     pub fn write_color(&self, x: u8, y: u8, color: Color) {
         self.output_buffer.write_pixel(
             x as usize,
             y as usize,
-            SCREEN_COLOR_PALETTE[color as usize],
+            SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
         );
     }
 
@@ -581,6 +641,11 @@ impl Emulator {
     }
 
     fn advance_pending_enable_interrupts_state(&mut self) {
+        // Pending interrupts state only advances when an instruction finishes
+        if self.ticks_to_next_instruction != 0 {
+            return;
+        }
+
         match self.pending_enable_interrupts {
             PendingEnableInterrupt::None => {}
             // An instruction just finished so we can enable interrupts now
@@ -604,29 +669,9 @@ impl Emulator {
         }
     }
 
-    pub fn current_interrupt_to_handle(&self) -> Option<Interrupt> {
-        if !self.regs.interrupts_enabled() {
-            return None;
-        }
-
-        let interrupt_bits = self.ie & self.if_reg() & 0x1F;
-        if interrupt_bits == 0 {
-            return None;
-        }
-
-        if (interrupt_bits & 0x01) != 0 {
-            Some(Interrupt::VBlank)
-        } else if (interrupt_bits & 0x02) != 0 {
-            Some(Interrupt::LcdStat)
-        } else if (interrupt_bits & 0x04) != 0 {
-            Some(Interrupt::Timer)
-        } else if (interrupt_bits & 0x08) != 0 {
-            Some(Interrupt::Serial)
-        } else if (interrupt_bits & 0x10) != 0 {
-            Some(Interrupt::Joypad)
-        } else {
-            unreachable!()
-        }
+    /// Return the lower 5 bits of IE & IF. If nonzero then there is an interrupt to handle.
+    pub fn interrupt_bits(&self) -> u8 {
+        self.ie & self.if_reg() & 0x1F
     }
 
     fn handle_interrupt(&mut self, interrupt: Interrupt) {
@@ -637,6 +682,49 @@ impl Emulator {
         self.regs.set_interrupts_enabled(false);
 
         self.call_interrupt_handler(interrupt);
+    }
+
+    /// Start an OAM DMA transfer. Data will be written to OAM at once when the transfer completes
+    /// in a fixed number of ticks.
+    ///
+    /// Panics if an OAM DMA transfer is already in progress.
+    pub fn start_oam_dma_transfer(&mut self, source_address: u16) {
+        if self.current_oam_dma_transfer.is_some() {
+            panic!("Attempted to start OAM DMA transfer while one is already in progress");
+        }
+
+        self.current_oam_dma_transfer = Some(OamDmaTransfer {
+            source_address,
+            ticks_remaining: OAM_DMA_TRANSFER_TICKS,
+        });
+
+        for i in 0..OAM_SIZE {
+            let byte = self.read_address(source_address.wrapping_add(i as u16));
+            self.oam[i] = byte;
+        }
+    }
+
+    /// Complete an OAM DMA transfer, actually writing all data to OAM.
+    fn complete_oam_dma_transfer(&mut self) {
+        let transfer = self.current_oam_dma_transfer.take().unwrap();
+        let source_address = transfer.source_address;
+        debug_assert!(transfer.ticks_remaining == 0);
+
+        for i in 0..OAM_SIZE {
+            let byte = self.read_address(source_address.wrapping_add(i as u16));
+            self.oam[i] = byte;
+        }
+    }
+
+    /// Advance the state of the current OAM DMA transfer each tick, if one is in progress.
+    fn advance_oam_dma_transfer_state(&mut self) {
+        if let Some(transfer) = &mut self.current_oam_dma_transfer {
+            transfer.ticks_remaining -= 1;
+
+            if transfer.ticks_remaining == 0 {
+                self.complete_oam_dma_transfer();
+            }
+        }
     }
 }
 

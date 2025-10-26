@@ -270,6 +270,8 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
 
         let mut final_color_index_and_palette = (background_color_index, emulator.bgp());
 
+        // println!("num_objects: {}, are_objects_enabled: {}", objects.len(), emulator.is_lcdc_obj_enabled());
+
         if emulator.is_lcdc_obj_enabled() {
             for object in &objects {
                 let current_object_x = screen_to_object_x(x);

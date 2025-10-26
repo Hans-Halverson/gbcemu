@@ -146,6 +146,14 @@ impl Emulator {
         }
     }
 
+    fn write_dma_impl(&mut self, _: Address, value: Register) {
+        self.write_dma_raw(value);
+
+        // Writing to the DMA register starts a DMA transfer
+        let source_address = (value as u16) << 8;
+        self.start_oam_dma_transfer(source_address);
+    }
+
     fn read_ly_impl(&self, _: Address) -> Register {
         self.scanline()
     }
@@ -287,6 +295,7 @@ define_registers!(
         write_register_raw
     ),
     (lyc, 0xFF45, 0x0, 0x00, read_register_raw, write_lyc_impl),
+    (dma, 0xFF46, 0xFF, 0x00, read_register_raw, write_dma_impl),
     (
         wy,
         0xFF4A,

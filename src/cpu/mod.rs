@@ -476,7 +476,15 @@ unimplemented_instruction!(scf);
 unimplemented_instruction!(ccf);
 
 unimplemented_instruction!(stop);
-unimplemented_instruction!(halt);
+
+define_instruction!(halt, fn(emulator, _) {
+    // Note that if there are pending interrupts but the IME is disabled then the CPU does not halt.
+    if emulator.regs().interrupts_enabled() || emulator.interrupt_bits() == 0 {
+        // emulator.halt_cpu();
+    }
+
+    emulator.schedule_next_instruction(4);
+});
 
 /// Any arithmetic operation between the accumulator and an r8 operand.
 fn arithmetic_a_r8_instruction(
