@@ -1,7 +1,7 @@
 use clap::Parser;
 use gbcemu::{
     cartridge::Cartridge,
-    emulator::{Emulator, SharedOutputBuffer},
+    emulator::{Emulator, SharedInputAdapter, SharedOutputBuffer},
     gui::start_gui,
     machine::Machine,
     options::{Args, Options},
@@ -26,11 +26,11 @@ fn main() {
         return;
     }
 
-    let (emulator_thread, shared_output_buffer) =
+    let (emulator_thread, (shared_input_adapter, shared_output_buffer)) =
         start_emulator_thread(options.clone(), cartridge, machine);
 
     if !args.headless {
-        start_gui(shared_output_buffer);
+        start_gui(shared_input_adapter, shared_output_buffer);
     } else {
         emulator_thread.join().unwrap();
     }
@@ -46,12 +46,16 @@ fn start_emulator_thread(
     options: Arc<Options>,
     cartridge: Cartridge,
     machine: Machine,
-) -> (JoinHandle<()>, SharedOutputBuffer) {
+) -> (JoinHandle<()>, (SharedInputAdapter, SharedOutputBuffer)) {
     let (sender, receiver) = channel();
 
     let emulator_thread = thread::spawn(move || {
         let mut emulator = Box::new(Emulator::new(cartridge, machine, options));
-        sender.send(emulator.clone_output_buffer()).unwrap();
+
+        let input_adapter = emulator.clone_input_adapter();
+        let output_buffer = emulator.clone_output_buffer();
+
+        sender.send((input_adapter, output_buffer)).unwrap();
         emulator.run();
     });
 

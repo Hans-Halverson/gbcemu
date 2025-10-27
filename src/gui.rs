@@ -1,14 +1,16 @@
 use eframe::{
-    egui::{self, Rect},
+    egui::{self, Key, Rect},
     epaint::CornerRadius,
 };
 
-use crate::emulator::{SCREEN_HEIGHT, SCREEN_WIDTH, SharedOutputBuffer};
+use crate::emulator::{
+    Button, SCREEN_HEIGHT, SCREEN_WIDTH, SharedInputAdapter, SharedOutputBuffer,
+};
 
 /// Size in pixels of a single gb pixel
 const PIXEL_SCALE: usize = 4;
 
-pub fn start_gui(output_buffer: SharedOutputBuffer) {
+pub fn start_gui(input_adapter: SharedInputAdapter, output_buffer: SharedOutputBuffer) {
     eframe::run_native(
         "GBC Emulator",
         eframe::NativeOptions {
@@ -24,6 +26,7 @@ pub fn start_gui(output_buffer: SharedOutputBuffer) {
         },
         Box::new(|_| {
             Ok(Box::new(GuiApp {
+                input_adapter,
                 pixels: output_buffer,
             }))
         }),
@@ -32,6 +35,7 @@ pub fn start_gui(output_buffer: SharedOutputBuffer) {
 }
 
 struct GuiApp {
+    input_adapter: SharedInputAdapter,
     pixels: SharedOutputBuffer,
 }
 
@@ -41,6 +45,34 @@ impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             let painter = ui.painter();
+
+            let mut buttons = 0;
+            if ctx.input(|i| i.key_down(Key::A)) {
+                buttons |= Button::Select as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::S)) {
+                buttons |= Button::Start as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::Z)) {
+                buttons |= Button::B as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::X)) {
+                buttons |= Button::A as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::ArrowUp)) {
+                buttons |= Button::Up as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::ArrowDown)) {
+                buttons |= Button::Down as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::ArrowLeft)) {
+                buttons |= Button::Left as u8;
+            }
+            if ctx.input(|i| i.key_down(Key::ArrowRight)) {
+                buttons |= Button::Right as u8;
+            }
+
+            self.input_adapter.set_pressed_buttons(buttons);
 
             for y in 0..SCREEN_HEIGHT {
                 for x in 0..SCREEN_WIDTH {

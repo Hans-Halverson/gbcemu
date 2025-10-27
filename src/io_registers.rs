@@ -128,6 +128,18 @@ impl Emulator {
         is_bit_set(self.stat_raw(), 6)
     }
 
+    fn read_joypad_impl(&self, _: Address) -> Register {
+        let raw = self.joypad_reg_raw();
+        let select_special = is_bit_set(raw, 5);
+        let select_directional = is_bit_set(raw, 4);
+
+        Self::buttons_to_joypad_reg(
+            self.pressed_buttons() as u8,
+            select_special,
+            select_directional,
+        )
+    }
+
     fn write_if_impl(&mut self, _: Address, value: Register) {
         // Write the lower 5 bits, leave the top 3 set. This allows raw reads.
         self.write_if_reg_raw(0xE0 | (0x1F & value));
@@ -275,6 +287,14 @@ const UNITIALIZED: u8 = 0xFF;
 
 // (register name, address, DMG initial value, CGB initial value, read handler, write handler)
 define_registers!(
+    (
+        joypad_reg,
+        0xFF00,
+        0xCF,
+        0xCF,
+        read_joypad_impl,
+        write_register_raw
+    ),
     (if_reg, 0xFF0F, 0xE1, 0xE1, read_register_raw, write_if_impl),
     (
         lcdc,

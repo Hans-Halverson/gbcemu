@@ -2,7 +2,7 @@ use std::{
     array,
     sync::{
         Arc,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU8, AtomicU32, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -69,6 +69,42 @@ impl SharedOutputBuffer {
             | (color.a() as u32);
 
         self.pixels[y][x].store(encoded, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub enum Button {
+    A = 0x01,
+    B = 0x02,
+    Select = 0x04,
+    Start = 0x08,
+    Right = 0x10,
+    Left = 0x20,
+    Up = 0x40,
+    Down = 0x80,
+}
+
+type ButtonSet = u8;
+
+#[derive(Clone)]
+pub struct SharedInputAdapter {
+    pressed_buttons: Arc<AtomicU8>,
+}
+
+impl SharedInputAdapter {
+    pub fn new() -> Self {
+        Self {
+            pressed_buttons: Arc::new(AtomicU8::new(0)),
+        }
+    }
+
+    fn get_pressed_buttons(&self) -> u8 {
+        self.pressed_buttons.load(Ordering::Relaxed)
+    }
+
+    pub fn set_pressed_buttons(&mut self, buttons: u8) {
+        self.pressed_buttons.store(buttons, Ordering::Relaxed);
     }
 }
 
@@ -211,6 +247,9 @@ pub struct Emulator {
     /// Options for the emulator
     options: Arc<Options>,
 
+    /// Input adapter for reading button presses from the GUI thread
+    input_adapter: SharedInputAdapter,
+
     /// Output buffer for the screen which is shared with the GUI thread
     output_buffer: SharedOutputBuffer,
 
@@ -264,6 +303,9 @@ pub struct Emulator {
 
     /// Internal line number counter used for rendering the window
     window_line_counter: WindowLineCounter,
+
+    /// Set of currently pressed buttons, exposed via the joypad register
+    pressed_buttons: ButtonSet,
 }
 
 impl Emulator {
@@ -273,6 +315,7 @@ impl Emulator {
         Emulator {
             cartridge,
             options,
+            input_adapter: SharedInputAdapter::new(),
             output_buffer: SharedOutputBuffer::new(),
             tick: 0,
             frame: 0,
@@ -291,6 +334,7 @@ impl Emulator {
             current_oam_dma_transfer: None,
             is_cpu_halted: false,
             window_line_counter: WindowLineCounter::new(),
+            pressed_buttons: 0,
         }
     }
 
@@ -336,6 +380,14 @@ impl Emulator {
 
     pub fn window_line_counter_mut(&mut self) -> &mut WindowLineCounter {
         &mut self.window_line_counter
+    }
+
+    pub fn pressed_buttons(&self) -> ButtonSet {
+        self.pressed_buttons
+    }
+
+    pub fn clone_input_adapter(&self) -> SharedInputAdapter {
+        self.input_adapter.clone()
     }
 
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
@@ -495,6 +547,8 @@ impl Emulator {
     }
 
     fn run_tick(&mut self) {
+        self.handle_inputs();
+
         // Ready for next instruction. Either execute the next instruction or an interrupt handler.
         'handled: {
             if self.ticks_to_next_instruction == 0 {
@@ -523,6 +577,76 @@ impl Emulator {
         // Advance states at the end of the tick
         self.advance_pending_enable_interrupts_state();
         self.advance_oam_dma_transfer_state();
+    }
+
+    fn handle_inputs(&mut self) {
+        // Check if there are any different pressed buttons
+        let new_pressed_buttons = self.input_adapter.get_pressed_buttons();
+        if self.pressed_buttons == new_pressed_buttons {
+            return;
+        }
+
+        // Convert to the joypad register format. Only write the buttons if the appropriate
+        // selection bits are set in the joypad register.
+        let old_joypad_reg = self.joypad_reg();
+        let select_special_buttons = (old_joypad_reg & 0x20) == 0;
+        let select_directional_buttons = (old_joypad_reg & 0x10) == 0;
+
+        let new_joypad_reg = Self::buttons_to_joypad_reg(
+            new_pressed_buttons,
+            select_special_buttons,
+            select_directional_buttons,
+        );
+
+        // Request a joypad interrupt if any of the lower 4 bits changed from 1 to 0
+        let needs_interrupt = (old_joypad_reg & !new_joypad_reg & 0x0F) != 0;
+        if needs_interrupt {
+            self.request_interrupt(Interrupt::Joypad);
+        }
+
+        // Update state to new pressed buttons
+        self.pressed_buttons = new_pressed_buttons;
+        self.write_joypad_reg(new_joypad_reg);
+    }
+
+    pub fn buttons_to_joypad_reg(
+        buttons: u8,
+        select_special: bool,
+        select_directional: bool,
+    ) -> Register {
+        let mut result = 0xFF;
+
+        if select_special {
+            if (buttons & (Button::Start as u8)) != 0 {
+                result &= !0x08;
+            }
+            if (buttons & (Button::Select as u8)) != 0 {
+                result &= !0x04;
+            }
+            if (buttons & (Button::B as u8)) != 0 {
+                result &= !0x02;
+            }
+            if (buttons & (Button::A as u8)) != 0 {
+                result &= !0x01;
+            }
+        }
+
+        if select_directional {
+            if (buttons & (Button::Down as u8)) != 0 {
+                result &= !0x08;
+            }
+            if (buttons & (Button::Up as u8)) != 0 {
+                result &= !0x04;
+            }
+            if (buttons & (Button::Left as u8)) != 0 {
+                result &= !0x02;
+            }
+            if (buttons & (Button::Right as u8)) != 0 {
+                result &= !0x01;
+            }
+        }
+
+        result
     }
 
     pub fn write_color(&self, x: u8, y: u8, color: Color) {
