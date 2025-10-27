@@ -214,14 +214,6 @@ macro_rules! define_instruction {
     };
 }
 
-macro_rules! unimplemented_instruction {
-    ($name:ident) => {
-        fn $name(_: &mut Emulator, _: Opcode) {
-            unimplemented!(stringify!($name));
-        }
-    };
-}
-
 define_instruction!(nop, fn (emulator, _) {
     // Do nothing
     emulator.schedule_next_instruction(4);
@@ -466,16 +458,90 @@ define_instruction!(add_hl_r16, fn (emulator, opcode) {
     emulator.schedule_next_instruction(8);
 });
 
-unimplemented_instruction!(rlca);
-unimplemented_instruction!(rrca);
-unimplemented_instruction!(rla);
-unimplemented_instruction!(rra);
-unimplemented_instruction!(daa);
-unimplemented_instruction!(cpl);
-unimplemented_instruction!(scf);
-unimplemented_instruction!(ccf);
+define_instruction!(rlca, fn(emulator, _) {
+    // Rotate register A left, setting carry flag based on bit that was rotated around.
+    let acc = emulator.regs().a();
+    let high_bit = acc & 0x80;
 
-unimplemented_instruction!(stop);
+    let rotated_acc = (acc << 1) | (high_bit >> 7);
+    emulator.regs_mut().set_a(rotated_acc);
+
+    emulator.regs_mut().set_carry_flag(high_bit != 0);
+    emulator.regs_mut().set_zero_flag(false);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(rrca, fn(emulator, _) {
+    // Rotate register A right, setting carry flag based on bit that was rotated around.
+    let acc = emulator.regs().a();
+    let low_bit = acc & 0x01;
+
+    let rotated_acc = (acc >> 1) | (low_bit << 7);
+    emulator.regs_mut().set_a(rotated_acc);
+
+    emulator.regs_mut().set_carry_flag(low_bit != 0);
+    emulator.regs_mut().set_zero_flag(false);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(rla, fn(emulator, _) {
+    // Rotate register A left through carry flag.
+    let acc = emulator.regs().a();
+    let carry_flag_byte = emulator.carry_flag_byte_value();
+
+    let high_bit = acc & 0x80;
+    let rotated_acc = (acc << 1) | carry_flag_byte;
+    emulator.regs_mut().set_a(rotated_acc);
+
+    emulator.regs_mut().set_carry_flag(high_bit != 0);
+    emulator.regs_mut().set_zero_flag(false);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(rra, fn(emulator, _) {
+    // Rotate register A right through carry flag.
+    let acc = emulator.regs().a();
+    let carry_flag_byte = emulator.carry_flag_byte_value();
+
+    let low_bit = acc & 0x01;
+    let rotated_acc = (acc >> 1) | (carry_flag_byte << 7);
+    emulator.regs_mut().set_a(rotated_acc);
+
+    emulator.regs_mut().set_carry_flag(low_bit != 0);
+    emulator.regs_mut().set_zero_flag(false);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(daa, fn(_, _) {
+    unimplemented!("daa")
+});
+
+define_instruction!(cpl, fn(emulator, _) {
+    let accumulator = emulator.regs().a();
+    emulator.regs_mut().set_a(!accumulator);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(scf, fn(emulator, _) {
+    emulator.regs_mut().set_carry_flag(true);
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(ccf, fn (emulator, _) {
+    let carry_flag = emulator.regs().carry_flag();
+    emulator.regs_mut().set_carry_flag(!carry_flag);
+
+    emulator.schedule_next_instruction(4);
+});
+
+define_instruction!(stop, fn(_, _) {
+    unimplemented!("stop")
+});
 
 define_instruction!(halt, fn(emulator, _) {
     // Note that if there are pending interrupts but the IME is disabled then the CPU does not halt.
@@ -839,13 +905,119 @@ define_instruction!(cb_prefix, fn (emulator, _) {
     emulator.execute_cb_instruction();
 });
 
-unimplemented_instruction!(rlc);
-unimplemented_instruction!(rrc);
-unimplemented_instruction!(rl);
-unimplemented_instruction!(rr);
-unimplemented_instruction!(sla);
-unimplemented_instruction!(sra);
-unimplemented_instruction!(srl);
+define_instruction!(rlc, fn(emulator, opcode) {
+    // Rotate register left, setting carry flag based on bit that was rotated around.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let high_bit = r8_value & 0x80;
+
+    let rotated_reg = (r8_value << 1) | (high_bit >> 7);
+    emulator.write_r8_operand_value(r8_operand, rotated_reg);
+
+    emulator.regs_mut().set_carry_flag(high_bit != 0);
+    emulator.set_zero_flag_for_value(rotated_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(rrc, fn(emulator, opcode) {
+    // Rotate register right, setting carry flag based on bit that was rotated around.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let low_bit = r8_value & 0x01;
+
+    let rotated_reg = (r8_value >> 1) | (low_bit << 7);
+    emulator.write_r8_operand_value(r8_operand, rotated_reg);
+
+    emulator.regs_mut().set_carry_flag(low_bit != 0);
+    emulator.set_zero_flag_for_value(rotated_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(rl, fn(emulator, opcode) {
+    // Rotate register left through carry flag.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let carry_flag_byte = emulator.carry_flag_byte_value();
+
+    let high_bit = r8_value & 0x80;
+    let rotated_reg = (r8_value << 1) | carry_flag_byte;
+    emulator.write_r8_operand_value(r8_operand, rotated_reg);
+
+    emulator.regs_mut().set_carry_flag(high_bit != 0);
+    emulator.set_zero_flag_for_value(rotated_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(rr, fn(emulator, opcode) {
+    // Rotate register right through carry flag.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+    let carry_flag_byte = emulator.carry_flag_byte_value();
+
+    let low_bit = r8_value & 0x01;
+    let rotated_reg = (r8_value >> 1) | (carry_flag_byte << 7);
+    emulator.write_r8_operand_value(r8_operand, rotated_reg);
+
+    emulator.regs_mut().set_carry_flag(low_bit != 0);
+    emulator.set_zero_flag_for_value(rotated_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(sla, fn(emulator, opcode) {
+    // Arithmetically shift register left setting carry flag with shifted bit.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+
+    let high_bit = r8_value & 0x80;
+    let shifted_reg = r8_value << 1;
+    emulator.write_r8_operand_value(r8_operand, shifted_reg);
+
+    emulator.regs_mut().set_carry_flag(high_bit != 0);
+    emulator.set_zero_flag_for_value(shifted_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(sra, fn(emulator, opcode) {
+    // Arithmetically shift register right setting carry flag with shifted bit.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+
+    let low_bit = r8_value & 0x01;
+    let shifted_reg = ((r8_value as i8) >> 1) as u8;
+    emulator.write_r8_operand_value(r8_operand, shifted_reg);
+
+    emulator.regs_mut().set_carry_flag(low_bit != 0);
+    emulator.set_zero_flag_for_value(shifted_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
+
+define_instruction!(srl, fn(emulator, opcode) {
+    // Logically shift register right setting carry flag with shifted bit.
+    let r8_operand = low_r8_operand(opcode);
+    let r8_value = emulator.read_r8_operand_value(r8_operand);
+
+    let low_bit = r8_value & 0x01;
+    let shifted_reg = r8_value >> 1;
+    emulator.write_r8_operand_value(r8_operand, shifted_reg);
+
+    emulator.regs_mut().set_carry_flag(low_bit != 0);
+    emulator.set_zero_flag_for_value(shifted_reg);
+
+    let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
+    emulator.schedule_next_instruction(num_ticks);
+});
 
 define_instruction!(swap, fn (emulator, opcode) {
     let r8_operand = low_r8_operand(opcode);
@@ -915,8 +1087,8 @@ const DISPATCH_TABLE: [InstructionHandler; 256] = [
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     /* 0x00 */ nop,            ld_r16_imm16,   ld_r16mem_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rlca,           ld_imm16mem_sp, add_hl_r16,     ld_a_r16mem,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rrca,
     /* 0x10 */ stop,           ld_r16_imm16,   ld_r16mem_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rla,            jr_imm8,        add_hl_r16,     ld_a_r16mem,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     rra,
-    /* 0x20 */ jr_cc_imm8,     ld_r16_imm16,   ld_hli_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     daa,            jr_cc_imm8,     add_hl_r16,     ld_a_hli,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     cpl,
-    /* 0x30 */ jr_cc_imm8,     ld_r16_imm16,   ld_hld_a,    inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     scf,            jr_cc_imm8,     add_hl_r16,     ld_a_hld,    dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     ccf,
+    /* 0x20 */ jr_cc_imm8,     ld_r16_imm16,   ld_hli_a,       inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     daa,            jr_cc_imm8,     add_hl_r16,     ld_a_hli,       dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     cpl,
+    /* 0x30 */ jr_cc_imm8,     ld_r16_imm16,   ld_hld_a,       inc_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     scf,            jr_cc_imm8,     add_hl_r16,     ld_a_hld,       dec_r16,        inc_r8,         dec_r8,         ld_r8_imm8,     ccf,
     /* 0x40 */ ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,
     /* 0x50 */ ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,
     /* 0x60 */ ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,       ld_r8_r8,
