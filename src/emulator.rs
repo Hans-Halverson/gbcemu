@@ -12,10 +12,11 @@ use eframe::egui::Color32;
 
 use crate::{
     address_space::{
-        Address, EXTERNAL_RAM_END, FIRST_WORK_RAM_BANK_END, FIRST_WORK_RAM_BANK_START, HRAM_END,
-        HRAM_SIZE, HRAM_START, IE_ADDRESS, IO_REGISTERS_END, OAM_END, OAM_SIZE, OAM_START, ROM_END,
-        SECOND_WORK_RAM_BANK_END, SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE,
-        SINGLE_WORK_RAM_BANK_SIZE, TOTAL_WORK_RAM_SIZE, VRAM_END, VRAM_START,
+        Address, ECHO_RAM_END, EXTERNAL_RAM_END, FIRST_WORK_RAM_BANK_END,
+        FIRST_WORK_RAM_BANK_START, HRAM_END, HRAM_SIZE, HRAM_START, IE_ADDRESS, IO_REGISTERS_END,
+        OAM_END, OAM_SIZE, OAM_START, ROM_END, SECOND_WORK_RAM_BANK_END,
+        SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE, SINGLE_WORK_RAM_BANK_SIZE,
+        TOTAL_WORK_RAM_SIZE, VRAM_END, VRAM_START,
     },
     cartridge::Cartridge,
     cpu::registers::Registers,
@@ -305,6 +306,10 @@ impl Emulator {
         self.in_cgb_mode
     }
 
+    pub fn in_test_mode(&self) -> bool {
+        self.options.in_test_mode
+    }
+
     pub fn oam(&self) -> &[u8] {
         &self.oam
     }
@@ -550,6 +555,8 @@ impl Emulator {
         } else if addr < SECOND_WORK_RAM_BANK_END {
             let physical_addr = self.physical_second_work_ram_bank_address(addr);
             self.work_ram[physical_addr]
+        } else if addr < ECHO_RAM_END {
+            panic!("Attempted to read from Echo RAM at address {:04X}", addr);
         } else if addr < OAM_END {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr]
@@ -589,6 +596,8 @@ impl Emulator {
         } else if addr < SECOND_WORK_RAM_BANK_END {
             let physical_addr = self.physical_second_work_ram_bank_address(addr);
             self.work_ram[physical_addr] = value;
+        } else if addr < ECHO_RAM_END {
+            panic!("Attempted to write to Echo RAM at address {:04X}", addr);
         } else if addr < OAM_END {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr] = value;

@@ -21,6 +21,10 @@ pub struct Registers {
     /// Set when addition or subtraction overflows, or when a 1 bit is shifted out
     carry_flag: bool,
 
+    /// BCD flags, not currently set
+    n_flag: bool,
+    h_flag: bool,
+
     /// Whether any interrupt are enabled, if disabled no interrupts will be handled
     interrupts_enabled: bool,
 }
@@ -37,6 +41,9 @@ impl Registers {
             zero_flag: true,
             // Variable depending on header checksum, choose an arbitrary value
             carry_flag: false,
+            // Variable depending on header checksum, choose an arbitrary value
+            h_flag: false,
+            n_flag: false,
             interrupts_enabled: false,
         }
     }
@@ -51,6 +58,8 @@ impl Registers {
             hl: [0x00, 0x0D],
             zero_flag: true,
             carry_flag: false,
+            h_flag: false,
+            n_flag: false,
             interrupts_enabled: false,
         }
     }
@@ -127,7 +136,7 @@ impl Registers {
     }
 
     pub fn l(&self) -> u8 {
-        self.hl[0]
+        self.hl[1]
     }
 
     pub fn set_l(&mut self, value: u8) {
@@ -159,7 +168,10 @@ impl Registers {
     }
 
     pub fn af(&self) -> u16 {
-        let flag_byte = ((self.carry_flag as u16) << 4) | ((self.zero_flag as u16) << 7);
+        let flag_byte = ((self.carry_flag as u16) << 4)
+            | ((self.h_flag as u16) << 5)
+            | ((self.n_flag as u16) << 6)
+            | ((self.zero_flag as u16) << 7);
         ((self.a as u16) << 8) | flag_byte
     }
 
@@ -168,6 +180,8 @@ impl Registers {
 
         self.a = a;
         self.zero_flag = (flag_byte & 0x80) != 0;
+        self.n_flag = (flag_byte & 0x40) != 0;
+        self.h_flag = (flag_byte & 0x20) != 0;
         self.carry_flag = (flag_byte & 0x10) != 0;
     }
 

@@ -19,6 +19,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub headless: bool,
 
+    /// Run in test mode (print success or failure based on magic instruction)
+    #[arg(long, default_value_t = false)]
+    pub test: bool,
+
     /// ROM file to run
     #[arg(required = true)]
     pub rom: String,
@@ -26,18 +30,23 @@ pub struct Args {
 
 pub struct Options {
     pub log_frames: bool,
+    pub in_test_mode: bool,
 }
 
 impl Options {
     pub fn from_args(args: &Args) -> Self {
         Options {
             log_frames: args.log_frames,
+            in_test_mode: args.test,
         }
     }
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { log_frames: false }
+        Options {
+            log_frames: false,
+            in_test_mode: false,
+        }
     }
 }

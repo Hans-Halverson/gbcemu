@@ -58,7 +58,8 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
 
         // Check if the object is visible on this scanline
         let object_start_y = oam[start];
-        let object_end_y = object_start_y + object_height(emulator.is_lcdc_obj_double_size());
+        let object_end_y =
+            object_start_y.wrapping_add(object_height(emulator.is_lcdc_obj_double_size()));
         let scanline_y = screen_to_object_y(scanline);
 
         if (object_start_y..object_end_y).contains(&scanline_y) {

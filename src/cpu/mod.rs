@@ -219,9 +219,40 @@ define_instruction!(nop, fn (emulator, _) {
     emulator.schedule_next_instruction(4);
 });
 
+fn has_tests_passed_registers(emulator: &Emulator) -> bool {
+    emulator.regs().b() == 3
+        && emulator.regs().c() == 5
+        && emulator.regs().d() == 8
+        && emulator.regs().e() == 13
+        && emulator.regs().h() == 21
+        && emulator.regs().l() == 34
+}
+
+fn has_tests_failed_registers(emulator: &Emulator) -> bool {
+    emulator.regs().b() == 0x42
+        && emulator.regs().c() == 0x42
+        && emulator.regs().d() == 0x42
+        && emulator.regs().e() == 0x42
+        && emulator.regs().h() == 0x42
+        && emulator.regs().l() == 0x42
+}
+
+fn check_test_results(emulator: &Emulator) {
+    if has_tests_passed_registers(emulator) {
+        println!("Test passed!");
+    } else if has_tests_failed_registers(emulator) {
+        println!("Test failed!",);
+    }
+}
+
 define_instruction!(ld_r8_r8, fn (emulator, opcode) {
     let source_r8_operand = low_r8_operand(opcode);
     let dest_r8_operand = high_r8_operand(opcode);
+
+    // Special case to check for test success or failure
+    if emulator.in_test_mode() && source_r8_operand == 0 && dest_r8_operand == 0 {
+        check_test_results(emulator);
+    }
 
     let source_r8_value = emulator.read_r8_operand_value(source_r8_operand);
     emulator.write_r8_operand_value(dest_r8_operand, source_r8_value);

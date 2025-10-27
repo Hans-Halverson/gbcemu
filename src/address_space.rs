@@ -32,6 +32,7 @@ pub const SINGLE_WORK_RAM_BANK_SIZE: usize =
 pub const TOTAL_WORK_RAM_SIZE: usize = SINGLE_WORK_RAM_BANK_SIZE * 2;
 
 // Echo RAM 0xE000-0xFE00
+pub const ECHO_RAM_END: Address = 0xFE00;
 
 /// OAM (Object Attribute Memory) 0xFE00-0xFEA0
 pub const OAM_START: Address = 0xFE00;
