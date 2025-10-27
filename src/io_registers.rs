@@ -32,6 +32,16 @@ impl IoRegisters {
     }
 }
 
+/// Return whether the given bit is set in the value.
+const fn is_bit_set(value: Register, bit: u8) -> bool {
+    (value & (1 << bit)) != 0
+}
+
+/// Return the given bit as a byte (0 or 1).
+const fn extract_bit_as_byte(value: Register, bit: u8) -> Register {
+    (value & (1 << bit)) >> bit
+}
+
 impl Emulator {
     /// Read an IO register, applying any special behavior.
     ///
@@ -71,47 +81,51 @@ impl Emulator {
     }
 
     pub fn is_lcdc_lcd_enabled(&self) -> bool {
-        self.lcdc_raw() & 0x80 != 0
+        is_bit_set(self.lcdc_raw(), 7)
     }
 
     pub fn lcdc_window_tile_map_number(&self) -> u8 {
-        self.lcdc_raw() & 0x40
+        extract_bit_as_byte(self.lcdc_raw(), 6)
     }
 
     pub fn is_lcdc_window_enabled(&self) -> bool {
-        self.lcdc_raw() & 0x20 != 0
+        is_bit_set(self.lcdc_raw(), 5)
     }
 
-    pub fn lcdc_bg_window_tile_data_area(&self) -> u8 {
-        self.lcdc_raw() & 0x10
+    pub fn lcdc_bg_window_tile_data_addressing_mode(&self) -> u8 {
+        extract_bit_as_byte(self.lcdc_raw(), 4)
     }
 
     pub fn lcdc_bg_tile_map_number(&self) -> u8 {
-        self.lcdc_raw() & 0x08
+        extract_bit_as_byte(self.lcdc_raw(), 3)
+    }
+
+    pub fn is_lcdc_obj_double_size(&self) -> bool {
+        is_bit_set(self.lcdc_raw(), 2)
     }
 
     pub fn is_lcdc_obj_enabled(&self) -> bool {
-        self.lcdc_raw() & 0x02 != 0
+        is_bit_set(self.lcdc_raw(), 1)
     }
 
     pub fn is_lcdc_bg_window_enabled(&self) -> bool {
-        self.lcdc_raw() & 0x01 != 0
+        is_bit_set(self.lcdc_raw(), 0)
     }
 
     pub fn is_stat_hblank_interrupt_enabled(&self) -> bool {
-        self.stat_raw() & 0x08 != 0
+        is_bit_set(self.stat_raw(), 3)
     }
 
     pub fn is_stat_vblank_interrupt_enabled(&self) -> bool {
-        self.stat_raw() & 0x10 != 0
+        is_bit_set(self.stat_raw(), 4)
     }
 
     pub fn is_stat_oam_scan_interrupt_enabled(&self) -> bool {
-        self.stat_raw() & 0x20 != 0
+        is_bit_set(self.stat_raw(), 5)
     }
 
     pub fn is_stat_lyc_interrupt_enabled(&self) -> bool {
-        self.stat_raw() & 0x40 != 0
+        is_bit_set(self.stat_raw(), 6)
     }
 
     fn write_if_impl(&mut self, _: Address, value: Register) {

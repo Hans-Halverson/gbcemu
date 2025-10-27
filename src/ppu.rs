@@ -44,6 +44,10 @@ const NUM_OBJECTS: usize = 40;
 
 const MAX_OBJECTS_PER_SCANLINE: usize = 10;
 
+fn object_height(are_objects_double_size: bool) -> u8 {
+    if are_objects_double_size { 16 } else { 8 }
+}
+
 /// Collect the first 10 objects whose y-coordinate overlaps with the given scanline.
 fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
     let mut objects = Vec::new();
@@ -53,9 +57,8 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
         let start = i * 4;
 
         // Check if the object is visible on this scanline
-        // TODO: Handle 16 pixel sprites
         let object_start_y = oam[start];
-        let object_end_y = object_start_y + 8;
+        let object_end_y = object_start_y + object_height(emulator.is_lcdc_obj_double_size());
         let scanline_y = screen_to_object_y(scanline);
 
         if (object_start_y..object_end_y).contains(&scanline_y) {
@@ -70,6 +73,12 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
                 break;
             }
         }
+    }
+
+    // In DMG mode, sort by x coordinate (lower x has higher priority). A stable sort is used so
+    // that earlier objects in OAM have higher priority when x coordinates are equal.
+    if !emulator.in_cgb_mode() {
+        objects.sort_by_key(|obj| obj.x);
     }
 
     objects
@@ -92,7 +101,7 @@ const TRANSPARENT_COLOR_INDEX: ColorIndex = 0;
 /// Returns the color index of the background or window pixel at (x, y) on the screen.
 ///
 /// Returns None if background and window are disabled.
-fn background_or_window_color_index(emulator: &Emulator, x: u8, y: u8) -> Option<ColorIndex> {
+fn background_or_window_color_index(emulator: &mut Emulator, x: u8, y: u8) -> Option<ColorIndex> {
     if !emulator.is_lcdc_bg_window_enabled() {
         return None;
     }
@@ -113,18 +122,58 @@ fn background_or_window_color_index(emulator: &Emulator, x: u8, y: u8) -> Option
     let tile_index =
         lookup_tile_in_tile_map(emulator, !is_window, tile_map_coordinates.tile_map_index);
 
-    let tile_data_area_number = (emulator.lcdc_bg_window_tile_data_area() == 0) as u8;
+    let tile_data_area_addressing_mode = emulator.lcdc_bg_window_tile_data_addressing_mode();
 
     // Lookup the color index at the offsets within this tile, stored in tile data area
     let color_index = lookup_color_index_in_tile(
         emulator,
-        tile_data_area_number,
+        tile_data_area_addressing_mode,
         tile_index,
         tile_map_coordinates.x_offset,
         tile_map_coordinates.y_offset,
     );
 
     Some(color_index)
+}
+
+/// An internal counter used for tracking the tilemap line number for the window. Only incremented
+/// when the window itself is rendered on a scanline, instead of incrementing every scanline.
+pub struct WindowLineCounter {
+    /// The value of the counter
+    line: u8,
+    /// The last scanline (in screen coordinates) when the counter was updated
+    last_updated_scanline: Option<u8>,
+}
+
+impl WindowLineCounter {
+    pub fn new() -> Self {
+        Self {
+            line: 0,
+            last_updated_scanline: None,
+        }
+    }
+
+    /// Reset the internal counter at the start of each VBlank.
+    pub fn reset(&mut self) {
+        self.line = 0;
+        self.last_updated_scanline = None;
+    }
+
+    /// Get the window coordinate for the given scanline, updating the internal counter the first
+    /// time each scanline in screen space is processed.
+    fn get_for_scanline(&mut self, screen_scanline: u8) -> u8 {
+        if let Some(last_scanline) = self.last_updated_scanline {
+            if screen_scanline != last_scanline {
+                self.line += 1;
+                self.last_updated_scanline = Some(screen_scanline);
+            }
+        } else {
+            self.line = 0;
+            self.last_updated_scanline = Some(screen_scanline);
+        }
+
+        self.line
+    }
 }
 
 struct TileMapCoordinates {
@@ -150,7 +199,11 @@ fn background_tile_map_coordinates(emulator: &Emulator, x: u8, y: u8) -> TileMap
 
 /// Looks up the tile map index and offsets for the window at the given (x, y) screen coordinates
 /// accounting for window position.
-fn window_tile_map_coordinates(emulator: &Emulator, x: u8, y: u8) -> Option<TileMapCoordinates> {
+fn window_tile_map_coordinates(
+    emulator: &mut Emulator,
+    x: u8,
+    y: u8,
+) -> Option<TileMapCoordinates> {
     // Window x register is offset by 7 to allow for specifying positions off-screen
     let window_start_x = emulator.wx() - 7;
     let window_start_y = emulator.wy();
@@ -162,7 +215,7 @@ fn window_tile_map_coordinates(emulator: &Emulator, x: u8, y: u8) -> Option<Tile
 
     // Final pixel index within the 256x256 window
     let window_x = x.wrapping_sub(window_start_x);
-    let window_y = y.wrapping_sub(window_start_y);
+    let window_y = emulator.window_line_counter_mut().get_for_scanline(y);
 
     Some(tile_map_coordinates(window_x, window_y))
 }
@@ -210,11 +263,11 @@ fn lookup_tile_in_tile_map(emulator: &Emulator, is_background: bool, tile_map_in
     emulator.read_address((tile_map_base + tile_map_index) as u16)
 }
 
-const TILE_DATA_1_ADDRESS: usize = 0x8000;
-const TILE_DATA_2_ADDRESS: usize = 0x8800;
+const TILE_DATA_1_BASE_ADDRESS: usize = 0x8000;
+const TILE_DATA_2_BASE_ADDRESS: usize = 0x9000;
 
 /// Objects always use the first tile data area.
-const OBJECT_TILE_DATA_NUMBER: u8 = 0;
+const OBJECT_TILE_DATA_ADDRESSING_MODE: u8 = 1;
 
 const TILE_DATA_SIZE: usize = 16;
 
@@ -223,19 +276,19 @@ const TILE_DATA_SIZE: usize = 16;
 /// Use the tile data area provided (0 or 1).
 fn lookup_color_index_in_tile(
     emulator: &Emulator,
-    tile_data_area_number: u8,
+    tile_data_area_addressing_mode: u8,
     tile_index: u8,
     x_offset: u8,
     y_offset: u8,
 ) -> ColorIndex {
-    let tile_data_base = if tile_data_area_number == 0 {
-        TILE_DATA_1_ADDRESS
-    } else {
-        TILE_DATA_2_ADDRESS
-    };
-
     // Calculate the start of the tile data
-    let tile_data_start = tile_data_base + (tile_index as usize * TILE_DATA_SIZE);
+    let tile_data_start = if tile_data_area_addressing_mode == 1 {
+        TILE_DATA_1_BASE_ADDRESS + (tile_index as usize * TILE_DATA_SIZE)
+    } else {
+        // In 0x8800 addressing mode the tile index is interpreted as signed
+        let tile_index_offset = tile_index as i8 as isize * TILE_DATA_SIZE as isize;
+        TILE_DATA_2_BASE_ADDRESS.wrapping_add_signed(tile_index_offset)
+    };
 
     // Each line in the tile is represented by 2 bytes
     let line_data_start = tile_data_start + (y_offset as usize * 2);
@@ -265,12 +318,13 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
     // Find the first 10 objects that intersect with this scanline
     let objects = oam_scan(emulator, scanline);
 
+    let are_objects_double_size = emulator.is_lcdc_obj_double_size();
+    let object_height = object_height(are_objects_double_size);
+
     for x in 0..(SCREEN_WIDTH as u8) {
         let background_color_index = background_or_window_color_index(emulator, x, scanline);
 
         let mut final_color_index_and_palette = (background_color_index, emulator.bgp());
-
-        // println!("num_objects: {}, are_objects_enabled: {}", objects.len(), emulator.is_lcdc_obj_enabled());
 
         if emulator.is_lcdc_obj_enabled() {
             for object in &objects {
@@ -289,17 +343,30 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
                     current_object_x - object.x
                 };
 
-                let y_offset = if object.is_vertically_flipped() {
-                    7 - (current_object_y - object.y)
+                let mut y_offset = if object.is_vertically_flipped() {
+                    (object_height - 1) - (current_object_y - object.y)
                 } else {
                     current_object_y - object.y
+                };
+
+                let tile_index = if are_objects_double_size {
+                    // In double tile mode the lower bit of the tile index is ignored and must be
+                    // set to 1 to access the second tile if pixel appears in the second tile.
+                    if y_offset >= 8 {
+                        y_offset -= 8;
+                        object.tile_index | 0x01
+                    } else {
+                        object.tile_index & 0xFE
+                    }
+                } else {
+                    object.tile_index
                 };
 
                 // Find the color index for the pixel at those offsets in the tile
                 let object_color_index = lookup_color_index_in_tile(
                     emulator,
-                    OBJECT_TILE_DATA_NUMBER,
-                    object.tile_index,
+                    OBJECT_TILE_DATA_ADDRESSING_MODE,
+                    tile_index,
                     x_offset,
                     y_offset,
                 );
@@ -318,6 +385,10 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
                     let object_palette = object_color_palette(emulator, object);
                     final_color_index_and_palette = (Some(object_color_index), object_palette);
                 }
+
+                // Always stop after we find a non-transparent object pixel, even if the background
+                // should be draw on top of this object pixel.
+                break;
             }
         }
 

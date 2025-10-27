@@ -24,7 +24,7 @@ use crate::{
     machine::Machine,
     mbc::mbc::Location,
     options::Options,
-    ppu::{Color, draw_scanline},
+    ppu::{Color, WindowLineCounter, draw_scanline},
 };
 
 /// Width of the gameboy screen in pixels
@@ -260,6 +260,9 @@ pub struct Emulator {
 
     /// Whether the CPU is currently halted
     is_cpu_halted: bool,
+
+    /// Internal line number counter used for rendering the window
+    window_line_counter: WindowLineCounter,
 }
 
 impl Emulator {
@@ -286,6 +289,7 @@ impl Emulator {
             pending_enable_interrupts: PendingEnableInterrupt::None,
             current_oam_dma_transfer: None,
             is_cpu_halted: false,
+            window_line_counter: WindowLineCounter::new(),
         }
     }
 
@@ -295,6 +299,10 @@ impl Emulator {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    pub fn in_cgb_mode(&self) -> bool {
+        self.in_cgb_mode
     }
 
     pub fn oam(&self) -> &[u8] {
@@ -319,6 +327,10 @@ impl Emulator {
 
     pub fn halt_cpu(&mut self) {
         self.is_cpu_halted = true;
+    }
+
+    pub fn window_line_counter_mut(&mut self) -> &mut WindowLineCounter {
+        &mut self.window_line_counter
     }
 
     pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
@@ -428,7 +440,7 @@ impl Emulator {
         } else {
             // Enter VBlank at the start of the first scanline after the screen
             if scanline == SCREEN_HEIGHT as u8 {
-                self.set_mode(Mode::VBlank);
+                self.enter_vblank();
             }
 
             // VBlank simply ticks along with nothing drawn
@@ -436,6 +448,11 @@ impl Emulator {
                 self.run_tick();
             }
         }
+    }
+
+    fn enter_vblank(&mut self) {
+        self.set_mode(Mode::VBlank);
+        self.window_line_counter.reset();
     }
 
     fn set_mode(&mut self, mode: Mode) {
