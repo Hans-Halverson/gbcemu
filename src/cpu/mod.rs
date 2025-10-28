@@ -206,6 +206,41 @@ fn ldh_address(imm8_operand: u8) -> u16 {
     0xFF00 | (imm8_operand as u16)
 }
 
+/// Value of the half carry bit for an addition of two bytes
+fn half_carry_for_add2(a: u8, b: u8) -> bool {
+    (a & 0x0F) + (b & 0x0F) > 0x0F
+}
+
+/// Value of the half carry bit for an addition of three bytes
+fn half_carry_for_add3(a: u8, b: u8, c: u8) -> bool {
+    (a & 0x0F) + (b & 0x0F) + (c & 0x0F) > 0x0F
+}
+
+/// Value of the half carry bit for a subtraction of two bytes
+fn half_carry_for_sub2(a: u8, b: u8) -> bool {
+    (a & 0x0F) < (b & 0x0F)
+}
+
+/// Value of the half carry bit for a subtraction of three bytes
+fn half_carry_for_sub3(a: u8, b: u8, c: u8) -> bool {
+    (a & 0x0F) < (b & 0x0F) + (c & 0x0F)
+}
+
+/// Value of the half carry bit for an addition of two u16 values. Half carry checks the middle of
+/// the upper byte.
+fn half_carry_for_add2_u16(a: u16, b: u16) -> bool {
+    (a & 0x0FFF) + (b & 0x0FFF) > 0x0FFF
+}
+
+/// Value of the half carry bit for the addition of an unsigned 16-bit and a signed 8-bit value.
+fn half_carry_for_sp_i8_add(a: u16, b: i8) -> bool {
+    if b >= 0 {
+        half_carry_for_add2(a as u8, b as u8)
+    } else {
+        half_carry_for_sub2(a as u8, b.wrapping_neg() as u8)
+    }
+}
+
 macro_rules! define_instruction {
     ($name:ident, fn ($emulator:pat, $opcode:pat) $body:block) => {
         fn $name($emulator: &mut Emulator, $opcode: Opcode) {
@@ -374,6 +409,8 @@ define_instruction!(ld_hl_sp_imm8, fn (emulator, _) {
 
     emulator.regs_mut().set_zero_flag(false);
     emulator.regs_mut().set_carry_flag(carried);
+    emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_sp_i8_add(sp, imm8_value as i8));
 
     emulator.regs_mut().set_hl(result);
 
@@ -456,6 +493,8 @@ define_instruction!(inc_r8, fn (emulator, operand) {
 
     // Carry flag is not set
     emulator.set_zero_flag_for_value(result);
+    emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_add2(r8_value, 1));
 
     let num_ticks = 4 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -470,6 +509,8 @@ define_instruction!(dec_r8, fn (emulator, operand) {
 
     // Carry flag is not set
     emulator.set_zero_flag_for_value(result);
+    emulator.regs_mut().set_subtraction_flag(true);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_sub2(r8_value, 1));
 
     let num_ticks = 4 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -485,6 +526,8 @@ define_instruction!(add_hl_r16, fn (emulator, opcode) {
 
     // Zero flag is not set
     emulator.regs_mut().set_carry_flag(carried);
+    emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_add2_u16(hl, r16_value));
 
     emulator.schedule_next_instruction(8);
 });
@@ -499,6 +542,7 @@ define_instruction!(rlca, fn(emulator, _) {
 
     emulator.regs_mut().set_carry_flag(high_bit != 0);
     emulator.regs_mut().set_zero_flag(false);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     emulator.schedule_next_instruction(4);
 });
@@ -513,6 +557,7 @@ define_instruction!(rrca, fn(emulator, _) {
 
     emulator.regs_mut().set_carry_flag(low_bit != 0);
     emulator.regs_mut().set_zero_flag(false);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     emulator.schedule_next_instruction(4);
 });
@@ -528,6 +573,7 @@ define_instruction!(rla, fn(emulator, _) {
 
     emulator.regs_mut().set_carry_flag(high_bit != 0);
     emulator.regs_mut().set_zero_flag(false);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     emulator.schedule_next_instruction(4);
 });
@@ -543,29 +589,64 @@ define_instruction!(rra, fn(emulator, _) {
 
     emulator.regs_mut().set_carry_flag(low_bit != 0);
     emulator.regs_mut().set_zero_flag(false);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     emulator.schedule_next_instruction(4);
 });
 
-define_instruction!(daa, fn(_, _) {
-    unimplemented!("daa")
+define_instruction!(daa, fn(emulator, _) {
+    let acc = emulator.regs().a();
+    let subtraction_flag = emulator.regs().subtraction_flag();
+    let carry_flag = emulator.regs().carry_flag();
+    let half_carry_flag = emulator.regs().half_carry_flag();
+
+    let mut adjustment = 0x0;
+    let mut carried = false;
+
+    if half_carry_flag || (!subtraction_flag && (acc & 0x0F) > 0x09) {
+        adjustment |= 0x06;
+    }
+
+    if carry_flag || (!subtraction_flag && acc > 0x99) {
+        adjustment |= 0x60;
+        carried = true;
+    }
+
+    let result = if subtraction_flag {
+        acc.wrapping_sub(adjustment)
+    } else {
+        acc.wrapping_add(adjustment)
+    };
+
+    emulator.set_zero_flag_for_value(result);
+    emulator.regs_mut().set_half_carry_flag(false);
+    emulator.regs_mut().set_carry_flag(carried);
+
+    emulator.schedule_next_instruction(4);
 });
 
 define_instruction!(cpl, fn(emulator, _) {
     let accumulator = emulator.regs().a();
     emulator.regs_mut().set_a(!accumulator);
 
+    emulator.regs_mut().set_subtraction_flag(true);
+    emulator.regs_mut().set_half_carry_flag(true);
+
     emulator.schedule_next_instruction(4);
 });
 
 define_instruction!(scf, fn(emulator, _) {
     emulator.regs_mut().set_carry_flag(true);
+    emulator.regs_mut().set_bcd_flags_zero();
+
     emulator.schedule_next_instruction(4);
 });
 
 define_instruction!(ccf, fn (emulator, _) {
     let carry_flag = emulator.regs().carry_flag();
+
     emulator.regs_mut().set_carry_flag(!carry_flag);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     emulator.schedule_next_instruction(4);
 });
@@ -605,7 +686,11 @@ fn arithmetic_a_r8_instruction(
 define_instruction!(add_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
         let (result, carried) = acc.overflowing_add(r8_value);
+
         emulator.regs_mut().set_carry_flag(carried);
+        emulator.regs_mut().set_subtraction_flag(false);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_add2(acc, r8_value));
+
         result
     });
 });
@@ -613,25 +698,41 @@ define_instruction!(add_a_r8, fn (emulator, opcode) {
 define_instruction!(sub_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
         let (result, carried) = acc.overflowing_sub(r8_value);
+
         emulator.regs_mut().set_carry_flag(carried);
+        emulator.regs_mut().set_subtraction_flag(true);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_sub2(acc, r8_value));
+
         result
     });
 });
 
 define_instruction!(adc_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
+        let carry_byte = emulator.carry_flag_byte_value();
+
         let (tmp, carry1) = acc.overflowing_add(r8_value);
-        let (result, carry2) = tmp.overflowing_add(emulator.carry_flag_byte_value());
+        let (result, carry2) = tmp.overflowing_add(carry_byte);
+
         emulator.regs_mut().set_carry_flag(carry1 || carry2);
+        emulator.regs_mut().set_subtraction_flag(false);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_add3(acc, r8_value, carry_byte));
+
         result
     });
 });
 
 define_instruction!(sbc_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
+        let carry_byte = emulator.carry_flag_byte_value();
+
         let (tmp, carry1) = acc.overflowing_sub(r8_value);
-        let (result, carry2) = tmp.overflowing_sub(emulator.carry_flag_byte_value());
+        let (result, carry2) = tmp.overflowing_sub(carry_byte);
+
         emulator.regs_mut().set_carry_flag(carry1 || carry2);
+        emulator.regs_mut().set_subtraction_flag(true);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_sub3(acc, r8_value, carry_byte));
+
         result
     });
 });
@@ -639,6 +740,9 @@ define_instruction!(sbc_a_r8, fn (emulator, opcode) {
 define_instruction!(and_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
         emulator.regs_mut().set_carry_flag(false);
+        emulator.regs_mut().set_subtraction_flag(false);
+        emulator.regs_mut().set_half_carry_flag(true);
+
         acc & r8_value
     });
 });
@@ -646,6 +750,8 @@ define_instruction!(and_a_r8, fn (emulator, opcode) {
 define_instruction!(xor_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
         emulator.regs_mut().set_carry_flag(false);
+        emulator.regs_mut().set_bcd_flags_zero();
+
         acc ^ r8_value
     });
 });
@@ -653,6 +759,8 @@ define_instruction!(xor_a_r8, fn (emulator, opcode) {
 define_instruction!(or_a_r8, fn (emulator, opcode) {
     arithmetic_a_r8_instruction(emulator, opcode, |emulator, acc, r8_value| {
         emulator.regs_mut().set_carry_flag(false);
+        emulator.regs_mut().set_bcd_flags_zero();
+
         acc | r8_value
     });
 });
@@ -664,8 +772,11 @@ define_instruction!(cp_a_r8, fn (emulator, opcode) {
     let acc = emulator.regs().a();
 
     let (result, carried) = acc.overflowing_sub(r8_value);
+
     emulator.regs_mut().set_carry_flag(carried);
     emulator.set_zero_flag_for_value(result);
+    emulator.regs_mut().set_subtraction_flag(true);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_sub2(acc, r8_value));
 
     let num_ticks = 4 + single_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -690,7 +801,11 @@ fn arithmetic_a_imm8_instruction(
 define_instruction!(add_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
         let (result, carried) = acc.overflowing_add(imm8_value);
+
         emulator.regs_mut().set_carry_flag(carried);
+        emulator.regs_mut().set_subtraction_flag(false);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_add2(acc, imm8_value));
+
         result
     });
 });
@@ -698,25 +813,41 @@ define_instruction!(add_a_imm8, fn (emulator, _) {
 define_instruction!(sub_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
         let (result, carried) = acc.overflowing_sub(imm8_value);
+
         emulator.regs_mut().set_carry_flag(carried);
+        emulator.regs_mut().set_subtraction_flag(true);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_sub2(acc, imm8_value));
+
         result
     });
 });
 
 define_instruction!(adc_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
+        let carry_byte = emulator.carry_flag_byte_value();
+
         let (tmp, carry1) = acc.overflowing_add(imm8_value);
-        let (result, carry2) = tmp.overflowing_add(emulator.carry_flag_byte_value());
+        let (result, carry2) = tmp.overflowing_add(carry_byte);
+
         emulator.regs_mut().set_carry_flag(carry1 || carry2);
+        emulator.regs_mut().set_subtraction_flag(false);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_add3(acc, imm8_value, carry_byte));
+
         result
     });
 });
 
 define_instruction!(sbc_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
+        let carry_byte = emulator.carry_flag_byte_value();
+
         let (tmp, carry1) = acc.overflowing_sub(imm8_value);
-        let (result, carry2) = tmp.overflowing_sub(emulator.carry_flag_byte_value());
+        let (result, carry2) = tmp.overflowing_sub(carry_byte);
+
         emulator.regs_mut().set_carry_flag(carry1 || carry2);
+        emulator.regs_mut().set_subtraction_flag(true);
+        emulator.regs_mut().set_half_carry_flag(half_carry_for_sub3(acc, imm8_value, carry_byte));
+
         result
     });
 });
@@ -724,6 +855,9 @@ define_instruction!(sbc_a_imm8, fn (emulator, _) {
 define_instruction!(and_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
         emulator.regs_mut().set_carry_flag(false);
+        emulator.regs_mut().set_subtraction_flag(false);
+        emulator.regs_mut().set_half_carry_flag(true);
+
         acc & imm8_value
     });
 });
@@ -731,6 +865,8 @@ define_instruction!(and_a_imm8, fn (emulator, _) {
 define_instruction!(xor_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
         emulator.regs_mut().set_carry_flag(false);
+        emulator.regs_mut().set_bcd_flags_zero();
+
         acc ^ imm8_value
     });
 });
@@ -738,6 +874,8 @@ define_instruction!(xor_a_imm8, fn (emulator, _) {
 define_instruction!(or_a_imm8, fn (emulator, _) {
     arithmetic_a_imm8_instruction(emulator, |emulator, acc, imm8_value| {
         emulator.regs_mut().set_carry_flag(false);
+        emulator.regs_mut().set_bcd_flags_zero();
+
         acc | imm8_value
     });
 });
@@ -748,8 +886,11 @@ define_instruction!(cp_a_imm8, fn (emulator, _) {
     let acc = emulator.regs().a();
 
     let (result, carried) = acc.overflowing_sub(imm8_value);
+
     emulator.regs_mut().set_carry_flag(carried);
     emulator.set_zero_flag_for_value(result);
+    emulator.regs_mut().set_subtraction_flag(true);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_sub2(acc, imm8_value));
 
     emulator.schedule_next_instruction(8);
 });
@@ -915,6 +1056,8 @@ define_instruction!(add_sp_imm8, fn (emulator, _) {
 
     emulator.regs_mut().set_zero_flag(false);
     emulator.regs_mut().set_carry_flag(carried);
+    emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_half_carry_flag(half_carry_for_sp_i8_add(sp, signed_operand as i8));
 
     emulator.schedule_next_instruction(16);
 });
@@ -947,6 +1090,7 @@ define_instruction!(rlc, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(high_bit != 0);
     emulator.set_zero_flag_for_value(rotated_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -963,6 +1107,7 @@ define_instruction!(rrc, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(low_bit != 0);
     emulator.set_zero_flag_for_value(rotated_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -980,6 +1125,7 @@ define_instruction!(rl, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(high_bit != 0);
     emulator.set_zero_flag_for_value(rotated_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -997,6 +1143,7 @@ define_instruction!(rr, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(low_bit != 0);
     emulator.set_zero_flag_for_value(rotated_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -1013,6 +1160,7 @@ define_instruction!(sla, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(high_bit != 0);
     emulator.set_zero_flag_for_value(shifted_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -1029,6 +1177,7 @@ define_instruction!(sra, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(low_bit != 0);
     emulator.set_zero_flag_for_value(shifted_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -1045,6 +1194,7 @@ define_instruction!(srl, fn(emulator, opcode) {
 
     emulator.regs_mut().set_carry_flag(low_bit != 0);
     emulator.set_zero_flag_for_value(shifted_reg);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -1062,6 +1212,7 @@ define_instruction!(swap, fn (emulator, opcode) {
 
     emulator.set_zero_flag_for_value(result);
     emulator.regs_mut().set_carry_flag(false);
+    emulator.regs_mut().set_bcd_flags_zero();
 
     let num_ticks = 8 + double_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
@@ -1073,7 +1224,10 @@ define_instruction!(bit, fn (emulator, opcode) {
 
     let r8_value = emulator.read_r8_operand_value(r8_operand);
     let is_bit_zero = r8_value & (1 << bit_index) == 0;
+
     emulator.regs_mut().set_zero_flag(is_bit_zero);
+    emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_half_carry_flag(true);
 
     let num_ticks = 8 + single_r8_operand_cycles(r8_operand);
     emulator.schedule_next_instruction(num_ticks);
