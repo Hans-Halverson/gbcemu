@@ -656,7 +656,7 @@ define_instruction!(stop, fn(_, _) {
 define_instruction!(halt, fn(emulator, _) {
     // Note that if there are pending interrupts but the IME is disabled then the CPU does not halt.
     if emulator.regs().interrupts_enabled() || emulator.interrupt_bits() == 0 {
-        // emulator.halt_cpu();
+        emulator.halt_cpu();
     }
 
     emulator.schedule_next_instruction(4);

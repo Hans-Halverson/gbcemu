@@ -240,6 +240,11 @@ struct OamDmaTransfer {
     ticks_remaining: usize,
 }
 
+const TAC_MASK_16_TICKS: u16 = 0x0008;
+const TAC_MASK_64_TICKS: u16 = 0x0020;
+const TAC_MASK_256_TICKS: u16 = 0x0080;
+const TAC_MASK_1024_TICKS: u16 = 0x0200;
+
 pub struct Emulator {
     /// Cartridge inserted
     cartridge: Cartridge,
@@ -306,6 +311,16 @@ pub struct Emulator {
 
     /// Set of currently pressed buttons, exposed via the joypad register
     pressed_buttons: ButtonSet,
+
+    /// Internal clock divider register - 16 bits but only the upper 8 bits are exposed via DIV.
+    full_divider_register: u16,
+
+    /// Current divider register mask set by TAC register, increment TIMA when the single bit in
+    /// this mask detects a falling edge (changed from 1 to 0).
+    tac_mask: u16,
+
+    /// Whether the timer (TIMA) can be incremented
+    is_timer_enabled: bool,
 }
 
 impl Emulator {
@@ -335,6 +350,9 @@ impl Emulator {
             is_cpu_halted: false,
             window_line_counter: WindowLineCounter::new(),
             pressed_buttons: 0,
+            full_divider_register: 0,
+            tac_mask: TAC_MASK_1024_TICKS,
+            is_timer_enabled: false,
         }
     }
 
@@ -384,6 +402,46 @@ impl Emulator {
 
     pub fn pressed_buttons(&self) -> ButtonSet {
         self.pressed_buttons
+    }
+
+    pub fn full_divider_register(&self) -> u16 {
+        self.full_divider_register
+    }
+
+    pub fn reset_divider_register(&mut self) {
+        self.full_divider_register = 0;
+    }
+
+    pub fn is_timer_enabled(&self) -> bool {
+        self.is_timer_enabled
+    }
+
+    pub fn set_timer_enabled(&mut self, enabled: bool) {
+        self.is_timer_enabled = enabled;
+    }
+
+    /// Map from the divider register mask to the corresponding bits of the TAC register
+    pub fn tac_bits(&self) -> u8 {
+        match self.tac_mask {
+            TAC_MASK_1024_TICKS => 0b00,
+            TAC_MASK_16_TICKS => 0b01,
+            TAC_MASK_64_TICKS => 0b10,
+            TAC_MASK_256_TICKS => 0b11,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Map from bits of the TAC register to the corresponding divider register mask
+    pub fn set_tac_bits(&mut self, tac_bits: u8) {
+        let tac_mask = match tac_bits & 0x3 {
+            0b00 => TAC_MASK_1024_TICKS,
+            0b01 => TAC_MASK_16_TICKS,
+            0b10 => TAC_MASK_64_TICKS,
+            0b11 => TAC_MASK_256_TICKS,
+            _ => unreachable!(),
+        };
+
+        self.tac_mask = tac_mask;
     }
 
     pub fn clone_input_adapter(&self) -> SharedInputAdapter {
@@ -548,6 +606,7 @@ impl Emulator {
 
     fn run_tick(&mut self) {
         self.handle_inputs();
+        self.increment_timers();
 
         // Ready for next instruction. Either execute the next instruction or an interrupt handler.
         'handled: {
@@ -876,6 +935,26 @@ impl Emulator {
 
             if transfer.ticks_remaining == 0 {
                 self.complete_oam_dma_transfer();
+            }
+        }
+    }
+
+    fn increment_timers(&mut self) {
+        // Divider register is incremented every tick but only top byte is exposed via DIV register
+        let old_divider = self.full_divider_register;
+        self.full_divider_register = self.full_divider_register.wrapping_add(1);
+
+        // Increment timer if there was falling edge on the TAC-selected bit of the divider register
+        let has_falling_edge = (old_divider & !self.full_divider_register & self.tac_mask) != 0;
+        if has_falling_edge && self.is_timer_enabled {
+            let (new_tima, overflowed) = self.tima().overflowing_add(1);
+
+            // Reset to TMA and generate an interrupt when timer overflows
+            if overflowed {
+                self.write_tima(self.tma());
+                self.request_interrupt(Interrupt::Timer);
+            } else {
+                self.write_tima(new_tima);
             }
         }
     }

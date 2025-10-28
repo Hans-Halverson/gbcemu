@@ -140,6 +140,23 @@ impl Emulator {
         )
     }
 
+    fn read_div_impl(&self, _: Address) -> Register {
+        (self.full_divider_register() >> 8) as u8
+    }
+
+    fn write_div_impl(&mut self, _: Address, _: Register) {
+        self.reset_divider_register();
+    }
+
+    fn read_tac_impl(&self, _: Address) -> Register {
+        self.tac_bits() | ((self.is_timer_enabled() as u8) << 2)
+    }
+
+    fn write_tac_impl(&mut self, _: Address, value: Register) {
+        self.set_timer_enabled(is_bit_set(value, 2));
+        self.set_tac_bits(value & 0x03);
+    }
+
     fn write_if_impl(&mut self, _: Address, value: Register) {
         // Write the lower 5 bits, leave the top 3 set. This allows raw reads.
         self.write_if_reg_raw(0xE0 | (0x1F & value));
@@ -295,6 +312,24 @@ define_registers!(
         read_joypad_impl,
         write_register_raw
     ),
+    (div, 0xFF04, 0xAB, VARIABLE, read_div_impl, write_div_impl),
+    (
+        tima,
+        0xFF05,
+        0x00,
+        0x00,
+        read_register_raw,
+        write_register_raw
+    ),
+    (
+        tma,
+        0xFF06,
+        0x00,
+        0x00,
+        read_register_raw,
+        write_register_raw
+    ),
+    (tac, 0xFF07, 0xF8, 0xF8, read_tac_impl, write_tac_impl),
     (if_reg, 0xFF0F, 0xE1, 0xE1, read_register_raw, write_if_impl),
     (
         lcdc,
