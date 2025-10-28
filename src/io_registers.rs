@@ -130,8 +130,8 @@ impl Emulator {
 
     fn read_joypad_impl(&self, _: Address) -> Register {
         let raw = self.joypad_reg_raw();
-        let select_special = is_bit_set(raw, 5);
-        let select_directional = is_bit_set(raw, 4);
+        let select_special = !is_bit_set(raw, 5);
+        let select_directional = !is_bit_set(raw, 4);
 
         Self::buttons_to_joypad_reg(
             self.pressed_buttons() as u8,

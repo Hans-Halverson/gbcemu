@@ -616,6 +616,9 @@ impl Emulator {
     ) -> Register {
         let mut result = 0xFF;
 
+        result &= if select_special { !0x20 } else { 0xFF };
+        result &= if select_directional { !0x10 } else { 0xFF };
+
         if select_special {
             if (buttons & (Button::Start as u8)) != 0 {
                 result &= !0x08;
