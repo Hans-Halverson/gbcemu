@@ -1,7 +1,5 @@
 use crate::emulator::{Emulator, Interrupt};
 
-pub mod registers;
-
 impl Emulator {
     /// Execute an instruction, returning the number of clock cycles taken by the instruction.
     pub fn execute_instruction(&mut self) {

@@ -19,13 +19,13 @@ use crate::{
         TOTAL_WORK_RAM_SIZE, VRAM_END, VRAM_START,
     },
     cartridge::Cartridge,
-    cpu::registers::Registers,
     initialization::IE_INIT,
     io_registers::IoRegisters,
     machine::Machine,
     mbc::mbc::Location,
     options::Options,
     ppu::{Color, WindowLineCounter, draw_scanline},
+    registers::Registers,
 };
 
 /// Width of the gameboy screen in pixels
