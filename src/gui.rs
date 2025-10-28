@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use eframe::{
     egui::{self, Key, Rect},
     epaint::CornerRadius,
@@ -34,6 +36,9 @@ pub fn start_gui(input_adapter: SharedInputAdapter, output_buffer: SharedOutputB
     .unwrap()
 }
 
+/// Target frames per second for the GUI to refresh
+const GUI_FPS: f64 = 60.0;
+
 struct GuiApp {
     input_adapter: SharedInputAdapter,
     pixels: SharedOutputBuffer,
@@ -43,6 +48,8 @@ impl GuiApp {}
 
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        ctx.request_repaint_after(Duration::from_secs_f64(1.0 / GUI_FPS));
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let painter = ui.painter();
 

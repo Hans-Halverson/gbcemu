@@ -1,6 +1,6 @@
 use crate::{
     address_space::Address,
-    mbc::{mbc1::Mbc1, no_mbc::NoMbc},
+    mbc::{mbc1::Mbc1, mbc3::Mbc3, no_mbc::NoMbc},
 };
 
 /// Memory Bank Controllers map the ROM and RAM banks into the GameBoy's address space.
@@ -33,12 +33,14 @@ pub enum MbcKind {
     /// Cartridges without a Memory Bank Controller
     None,
     Mbc1,
+    Mbc3,
 }
 
 pub fn create_mbc(kind: MbcKind) -> Box<dyn Mbc> {
     match kind {
         MbcKind::None => Box::new(NoMbc),
         MbcKind::Mbc1 => Box::new(Mbc1::new()),
+        MbcKind::Mbc3 => Box::new(Mbc3::new()),
     }
 }
 

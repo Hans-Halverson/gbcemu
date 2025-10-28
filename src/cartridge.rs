@@ -197,7 +197,8 @@ impl Cartridge {
         match cartridge_type {
             0x00 => MbcKind::None,
             0x01..=0x03 => MbcKind::Mbc1,
-            _ => panic!("Unsupported cartridge type: {:02X}", cartridge_type),
+            0x0F..=0x13 => MbcKind::Mbc3,
+            _ => panic!("Unsupported cartridge type: 0x{:02X}", cartridge_type),
         }
     }
 }
