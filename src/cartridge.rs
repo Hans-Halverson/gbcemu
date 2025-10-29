@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::{
-    address_space::SINGLE_EXTERNAL_RAM_BANK_SIZE,
+    address_space::{ROM_BANK_SIZE, SINGLE_EXTERNAL_RAM_BANK_SIZE},
     mbc::mbc::{Mbc, MbcKind, create_mbc},
 };
 
@@ -129,16 +129,16 @@ impl Cartridge {
         // Skip cartridge type (1 byte),
         let cartridge_type_byte = scanner.read_u8();
 
-        // Create MBC for this cartridge type
-        let mbc_kind = Self::mbc_kind_for_cartridge_type(cartridge_type_byte);
-        let mbc = create_mbc(mbc_kind);
-
         // ROM size (1 byte)
         let rom_size_byte = scanner.read_u8();
         assert!(rom_size_byte <= 0x08, "Unsupported ROM size");
 
-        let rom_size = (32 * 1024) << rom_size_byte;
+        let rom_size = (2 * ROM_BANK_SIZE) << rom_size_byte;
         assert_eq!(rom_bytes.len(), rom_size, "ROM size mismatch");
+
+        // Create MBC for this cartridge type
+        let mbc_kind = Self::mbc_kind_for_cartridge_type(cartridge_type_byte);
+        let mbc = create_mbc(mbc_kind, rom_size);
 
         // RAM size (1 byte)
         let ram_size_byte = scanner.read_u8();

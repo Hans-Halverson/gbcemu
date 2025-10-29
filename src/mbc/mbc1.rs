@@ -19,15 +19,18 @@ pub struct Mbc1 {
     ram_bank_num_or_upper_bits: usize,
     /// Banking Mode Select (6000–7FFF)
     is_advanced_banking_mode: bool,
+    /// Mask to apply to full ROM bank number to ensure it doesn't exceed available banks
+    rom_size_mask: usize,
 }
 
 impl Mbc1 {
-    pub fn new() -> Self {
+    pub fn new(rom_size: usize) -> Self {
         Mbc1 {
             is_ram_enabled: false,
             rom_bank_num: 1,
             ram_bank_num_or_upper_bits: 0,
             is_advanced_banking_mode: false,
+            rom_size_mask: (rom_size / ROM_BANK_SIZE) - 1,
         }
     }
 }
@@ -51,7 +54,7 @@ impl Mbc1 {
     }
 
     fn second_rom_bank_number(&self) -> usize {
-        self.rom_bank_num + (self.ram_bank_num_or_upper_bits << 5)
+        (self.rom_bank_num + (self.ram_bank_num_or_upper_bits << 5)) & self.rom_size_mask
     }
 
     fn ram_bank_number(&self) -> usize {
