@@ -1,10 +1,10 @@
 /// GameBoy has a 16-bit address space
 pub type Address = u16;
 
-/// First RAM bank 0x0000-0x4000
+/// First ROM bank 0x0000-0x4000
 pub const FIRST_ROM_BANK_END: Address = 0x4000;
 
-/// Second RAM bank 0x4000-0x8000
+/// Second ROM bank 0x4000-0x8000
 pub const ROM_START: Address = 0x4000;
 pub const ROM_END: Address = 0x8000;
 pub const ROM_BANK_SIZE: usize = (ROM_END - ROM_START) as usize;

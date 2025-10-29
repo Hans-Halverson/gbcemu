@@ -602,11 +602,11 @@ define_instruction!(daa, fn(emulator, _) {
     let mut carried = false;
 
     if half_carry_flag || (!subtraction_flag && (acc & 0x0F) > 0x09) {
-        adjustment |= 0x06;
+        adjustment += 0x06;
     }
 
     if carry_flag || (!subtraction_flag && acc > 0x99) {
-        adjustment |= 0x60;
+        adjustment += 0x60;
         carried = true;
     }
 
@@ -615,6 +615,8 @@ define_instruction!(daa, fn(emulator, _) {
     } else {
         acc.wrapping_add(adjustment)
     };
+
+    emulator.regs_mut().set_a(result);
 
     emulator.set_zero_flag_for_value(result);
     emulator.regs_mut().set_half_carry_flag(false);

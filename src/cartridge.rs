@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::mbc::mbc::{Mbc, MbcKind, create_mbc};
+use crate::{
+    address_space::SINGLE_EXTERNAL_RAM_BANK_SIZE,
+    mbc::mbc::{Mbc, MbcKind, create_mbc},
+};
 
 struct Scanner<'a> {
     data: &'a [u8],
@@ -140,11 +143,13 @@ impl Cartridge {
         // RAM size (1 byte)
         let ram_size_byte = scanner.read_u8();
         let mut ram_size = match ram_size_byte {
-            0x00 | 0x01 => 0,
-            0x02 => 8 * 1024,
-            0x03 => 32 * 1024,
-            0x04 => 128 * 1024,
-            0x05 => 64 * 1024,
+            // Still map 0x00 and 0x01 to 8KB of RAM as we have encountered test ROMS that expect
+            // this.
+            0x00 | 0x01 => SINGLE_EXTERNAL_RAM_BANK_SIZE,
+            0x02 => SINGLE_EXTERNAL_RAM_BANK_SIZE,
+            0x03 => 4 * SINGLE_EXTERNAL_RAM_BANK_SIZE,
+            0x04 => 16 * SINGLE_EXTERNAL_RAM_BANK_SIZE,
+            0x05 => 8 * SINGLE_EXTERNAL_RAM_BANK_SIZE,
             _ => panic!("Unsupported RAM size"),
         };
 
