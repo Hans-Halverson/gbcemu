@@ -16,7 +16,7 @@ use crate::{
         FIRST_WORK_RAM_BANK_START, HRAM_END, HRAM_SIZE, HRAM_START, IE_ADDRESS, IO_REGISTERS_END,
         OAM_END, OAM_SIZE, OAM_START, ROM_END, SECOND_WORK_RAM_BANK_END,
         SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE, SINGLE_WORK_RAM_BANK_SIZE,
-        TOTAL_WORK_RAM_SIZE, VRAM_END, VRAM_START,
+        TOTAL_WORK_RAM_SIZE, UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
     },
     cartridge::Cartridge,
     initialization::IE_INIT,
@@ -746,6 +746,9 @@ impl Emulator {
         } else if addr < OAM_END {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr]
+        } else if addr < UNUSABLE_SPACE_END {
+            // Unusable memory area returns a value depending on the model
+            0xFF
         } else if addr < IO_REGISTERS_END {
             self.read_io_register(addr)
         } else if addr < HRAM_END {
@@ -787,6 +790,8 @@ impl Emulator {
         } else if addr < OAM_END {
             let physical_addr = self.physical_oam_address(addr);
             self.oam[physical_addr] = value;
+        } else if addr < UNUSABLE_SPACE_END {
+            // Unusable memory area, writes are ignored
         } else if addr < IO_REGISTERS_END {
             self.write_io_register(addr, value)
         } else if addr < HRAM_END {

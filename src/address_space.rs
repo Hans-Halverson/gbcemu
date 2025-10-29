@@ -40,6 +40,7 @@ pub const OAM_END: Address = 0xFEA0;
 pub const OAM_SIZE: usize = (OAM_END - OAM_START) as usize;
 
 // Unusable space 0xFEA0-0xFF00
+pub const UNUSABLE_SPACE_END: Address = 0xFF00;
 
 /// IO Registers 0xFF00-0xFF80
 pub const IO_REGISTERS_START: Address = 0xFF00;
