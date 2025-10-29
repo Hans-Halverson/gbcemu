@@ -231,12 +231,16 @@ fn half_carry_for_add2_u16(a: u16, b: u16) -> bool {
 }
 
 /// Value of the half carry bit for the addition of an unsigned 16-bit and a signed 8-bit value.
+/// Half carry checks for overflow from the lower nibble.
 fn half_carry_for_sp_i8_add(a: u16, b: i8) -> bool {
-    if b >= 0 {
-        half_carry_for_add2(a as u8, b as u8)
-    } else {
-        half_carry_for_sub2(a as u8, b.wrapping_neg() as u8)
-    }
+    half_carry_for_add2(a as u8, b as u8)
+}
+
+/// Value of the carry bit for the addition of an unsigned 16-bit and a signed 8-bit value.
+/// Carry checks for overflow from the lower byte.
+fn carry_for_sp_i8_add(a: u16, b: i8) -> bool {
+    let (_, overflowed) = (a as u8).overflowing_add(b as u8);
+    overflowed
 }
 
 macro_rules! define_instruction {
@@ -403,14 +407,13 @@ define_instruction!(ld_hl_sp_imm8, fn (emulator, _) {
     let imm8_value = emulator.read_imm8_operand() as i8 as i16;
     let sp = emulator.regs().sp();
 
-    let (result, carried) = sp.overflowing_add_signed(imm8_value);
+    let result = sp.wrapping_add_signed(imm8_value);
+    emulator.regs_mut().set_hl(result);
 
     emulator.regs_mut().set_zero_flag(false);
-    emulator.regs_mut().set_carry_flag(carried);
     emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_carry_flag(carry_for_sp_i8_add(sp, imm8_value as i8));
     emulator.regs_mut().set_half_carry_flag(half_carry_for_sp_i8_add(sp, imm8_value as i8));
-
-    emulator.regs_mut().set_hl(result);
 
     emulator.schedule_next_instruction(12);
 });
@@ -1051,12 +1054,12 @@ define_instruction!(add_sp_imm8, fn (emulator, _) {
     let signed_operand = emulator.read_imm8_operand() as i8 as i16;
     let sp = emulator.regs().sp();
 
-    let (result, carried) = sp.overflowing_add_signed(signed_operand);
+    let result = sp.wrapping_add_signed(signed_operand);
     emulator.regs_mut().set_sp(result);
 
     emulator.regs_mut().set_zero_flag(false);
-    emulator.regs_mut().set_carry_flag(carried);
     emulator.regs_mut().set_subtraction_flag(false);
+    emulator.regs_mut().set_carry_flag(carry_for_sp_i8_add(sp, signed_operand as i8));
     emulator.regs_mut().set_half_carry_flag(half_carry_for_sp_i8_add(sp, signed_operand as i8));
 
     emulator.schedule_next_instruction(16);
