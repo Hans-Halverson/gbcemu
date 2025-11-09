@@ -208,12 +208,15 @@ fn window_tile_map_coordinates(
     x: u8,
     y: u8,
 ) -> Option<TileMapCoordinates> {
-    // Window x register is offset by 7 to allow for specifying positions off-screen
-    let window_start_x = emulator.wx() - 7;
+    // Window x register is offset by 7 to allow for specifying positions off-screen. Note that we
+    // must check for window start values that would be in the range [-7, 0) which are guaranteed to
+    // always be before the pixel.
+    let wx = emulator.wx();
+    let (window_start_x, is_window_start_x_negative) = wx.overflowing_sub(7);
     let window_start_y = emulator.wy();
 
     // Check if the pixel is within the window both horizontally and vertically
-    if window_start_x > x || window_start_y > y {
+    if (window_start_x > x && !is_window_start_x_negative) || window_start_y > y {
         return None;
     }
 
