@@ -49,7 +49,7 @@ fn start_emulator_thread(
     let rom_or_save_path = args.rom_or_save.clone();
     let dump_rom_info = args.dump_rom_info;
 
-    thread::spawn(move || {
+    spawn_emulator_thread(move || {
         let emulator_builder = if rom_or_save_path.ends_with(SAVE_FILE_EXTENSION) {
             let save_file_bytes = read_file(&rom_or_save_path);
             let save_file = rmp_serde::from_slice(&save_file_bytes)
@@ -87,4 +87,11 @@ fn start_emulator_thread(
 
         emulator.run();
     })
+}
+
+fn spawn_emulator_thread(f: impl FnOnce() + Send + 'static) -> thread::JoinHandle<()> {
+    thread::Builder::new()
+        .name("emulator".to_string())
+        .spawn(f)
+        .unwrap()
 }

@@ -50,7 +50,7 @@ const UNITIALIZED_RAM_VALUE_REGISTER: RegisterHandle = 4;
 impl Mbc1 {
     fn first_rom_bank_number(&self) -> usize {
         if self.is_advanced_banking_mode {
-            self.ram_bank_num_or_upper_bits << 5
+            (self.ram_bank_num_or_upper_bits << 5) & self.rom_size_mask
         } else {
             0
         }
