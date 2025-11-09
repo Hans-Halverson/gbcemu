@@ -104,6 +104,8 @@ pub enum Command {
     QuickSave(usize),
     /// Load a quick save from the given slot
     LoadQuickSave(usize),
+    /// Set whether the emulator is in turbo mode
+    SetTurboMode(bool),
 }
 
 impl SharedInputAdapter {
@@ -153,8 +155,14 @@ const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
 /// Total number of ticks to complete an OAM DMA transfer
 const OAM_DMA_TRANSFER_TICKS: usize = 640;
 
-/// Nanoseconds in real time per frame
+/// How much faster the emulator tries to run in turbo mode
+const TURBO_MULTIPLIER: u64 = 10;
+
+/// Nanoseconds in real time per frame in regular mode
 const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
+
+/// Nanoseconds in real time per frame in turbo mode
+const NS_PER_MICROFRAME: f64 = NS_PER_FRAME / (TURBO_MULTIPLIER as f64);
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum Mode {
@@ -282,9 +290,10 @@ pub struct Emulator {
     /// Current tick (T-cycle) within a frame
     tick: u32,
 
-    /// Current frame number
+    /// Current turbo frame number. The microframe number divided by the turbo multiplier is the
+    /// frame number in regular mode.
     #[serde(skip)]
-    frame: u64,
+    microframe: u64,
 
     /// Current (virtual) scanline number
     scanline: u8,
@@ -347,6 +356,10 @@ pub struct Emulator {
 
     /// Whether the timer (TIMA) can be incremented
     is_timer_enabled: bool,
+
+    /// Whether the emulator is currently in turbo mode
+    #[serde(skip)]
+    in_turbo_mode: bool,
 }
 
 pub struct EmulatorBuilder {
@@ -423,7 +436,7 @@ impl Emulator {
             save_file_path: None,
             machine,
             tick: 0,
-            frame: 0,
+            microframe: 0,
             scanline: 0,
             mode: Mode::OamScan,
             in_cgb_mode: is_cgb,
@@ -443,6 +456,7 @@ impl Emulator {
             full_divider_register: 0,
             tac_mask: TAC_MASK_1024_TICKS,
             is_timer_enabled: false,
+            in_turbo_mode: false,
         }
     }
 
@@ -542,6 +556,35 @@ impl Emulator {
         self.output_buffer.clone()
     }
 
+    fn ns_per_frame(&self) -> f64 {
+        if self.in_turbo_mode {
+            NS_PER_MICROFRAME
+        } else {
+            NS_PER_FRAME
+        }
+    }
+
+    fn microframes_per_frame(&self) -> u64 {
+        if self.in_turbo_mode {
+            1
+        } else {
+            TURBO_MULTIPLIER
+        }
+    }
+
+    /// The expected start time in nanoseconds for the current frame (or microframe)
+    fn expected_frame_start_nanos(&self) -> u64 {
+        ((self.microframe as f64) * NS_PER_MICROFRAME) as u64
+    }
+
+    fn format_frame_number(&self, microframe: u64) -> String {
+        if self.in_turbo_mode {
+            format!("{:.1}", (microframe as f64) / (TURBO_MULTIPLIER as f64))
+        } else {
+            format!("{}", microframe / TURBO_MULTIPLIER)
+        }
+    }
+
     /// Run the emulator at the GameBoy's native framerate
     pub fn run(&mut self) {
         let start_time = Instant::now();
@@ -550,25 +593,25 @@ impl Emulator {
         loop {
             let frame_start_nanos = duration_to_nanos(Instant::now().duration_since(start_time));
             if self.options.log_frames {
-                let expected_frame_start_nanos = NS_PER_FRAME as u64 * self.frame;
+                let expected_frame_start_nanos = self.expected_frame_start_nanos();
                 let frame_start_diff_nanos =
                     frame_start_nanos as i64 - expected_frame_start_nanos as i64;
                 println!(
                     "[FRAME] Frame start at {}ns, frame {}, {:.2}% through frame",
                     frame_start_nanos,
-                    self.frame,
-                    frame_start_diff_nanos as f64 / NS_PER_FRAME * 100.0
+                    self.format_frame_number(self.microframe),
+                    frame_start_diff_nanos as f64 / self.ns_per_frame() * 100.0
                 );
             }
 
             // Run a single frame
             self.run_frame();
 
-            // Increment frame number
-            self.frame += 1;
+            // Increment frame number (backed by microframes)
+            self.microframe += self.microframes_per_frame();
 
             // Target time (since start) to run the next frame
-            let next_frame_time_nanos = NS_PER_FRAME as u64 * self.frame;
+            let next_frame_time_nanos = self.expected_frame_start_nanos();
 
             // Current time (since start)
             let current_time = Instant::now();
@@ -588,7 +631,7 @@ impl Emulator {
                 if self.options.log_frames {
                     println!(
                         "[FRAME] Missed frame {} by {}ns",
-                        self.frame,
+                        self.format_frame_number(self.microframe),
                         current_time_nanos - next_frame_time_nanos
                     );
                 }
@@ -603,13 +646,14 @@ impl Emulator {
                     println!(
                         "[FRAME] Frame end at {}ns, frame {}, {:.2}% of frame budget used",
                         current_time_nanos,
-                        self.frame - 1,
-                        ((current_time_nanos - frame_start_nanos) as f64 / NS_PER_FRAME) * 100.0
+                        self.format_frame_number(self.microframe - self.microframes_per_frame()),
+                        ((current_time_nanos - frame_start_nanos) as f64 / self.ns_per_frame())
+                            * 100.0
                     );
                 }
 
                 thread::sleep(Duration::from_nanos(
-                    nanos_to_next_frame.saturating_sub(NS_PER_FRAME as u64 / 20),
+                    nanos_to_next_frame.saturating_sub(self.ns_per_frame() as u64 / 20),
                 ));
             }
         }
@@ -752,6 +796,7 @@ impl Emulator {
                 Command::Save => self.save_cartridge_state_to_disk(),
                 Command::QuickSave(slot) => self.quick_save(slot),
                 Command::LoadQuickSave(slot) => self.load_quick_save(slot),
+                Command::SetTurboMode(in_turbo_mode) => self.in_turbo_mode = in_turbo_mode,
             }
         }
     }
@@ -784,7 +829,7 @@ impl Emulator {
         let serialized_bytes = save_file.quick_saves[slot].as_ref().unwrap().to_vec();
 
         // Some state was not included in serialization and must be preserved
-        let frame = self.frame;
+        let microframe = self.microframe;
 
         let mut emulator_builder =
             EmulatorBuilder::from_quick_save_bytes(save_file, &serialized_bytes)
@@ -805,7 +850,7 @@ impl Emulator {
         *self = emulator_builder.build();
 
         // Restore state excluded from quick save
-        self.frame = frame;
+        self.microframe = microframe;
     }
 
     fn handle_update_pressed_buttons(&mut self, new_pressed_buttons: u8) {

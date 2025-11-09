@@ -35,9 +35,10 @@ pub fn start_gui(commands_tx: Sender<Command>, output_buffer: SharedOutputBuffer
             let menu = create_app_menu();
 
             Ok(Box::new(GuiApp {
-                pressed_buttons: 0,
                 commands_tx,
                 pixels: output_buffer,
+                pressed_buttons: 0,
+                in_turbo_mode: false,
                 _menu: menu,
             }))
         }),
@@ -49,9 +50,10 @@ pub fn start_gui(commands_tx: Sender<Command>, output_buffer: SharedOutputBuffer
 const GUI_FPS: f64 = 60.0;
 
 struct GuiApp {
-    pressed_buttons: u8,
     commands_tx: Sender<Command>,
     pixels: SharedOutputBuffer,
+    pressed_buttons: u8,
+    in_turbo_mode: bool,
     /// The app menu. Must be kept alive for the menu to function.
     _menu: Menu,
 }
@@ -116,6 +118,16 @@ impl GuiApp {
         }
     }
 
+    fn handle_turbo_mode(&mut self, ctx: &egui::Context) {
+        let in_turbo_mode = ctx.input(|i| i.key_down(Key::Space));
+        if in_turbo_mode != self.in_turbo_mode {
+            self.in_turbo_mode = in_turbo_mode;
+            self.commands_tx
+                .send(Command::SetTurboMode(in_turbo_mode))
+                .unwrap();
+        }
+    }
+
     fn draw_screen(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             let painter = ui.painter();
@@ -143,6 +155,7 @@ impl eframe::App for GuiApp {
 
         self.handle_menu_events(ctx);
         self.handle_pressed_buttons(ctx);
+        self.handle_turbo_mode(ctx);
 
         self.draw_screen(ctx);
     }
