@@ -1,7 +1,7 @@
 use std::{str::FromStr, sync::mpsc::Sender, time::Duration};
 
 use eframe::{
-    egui::{self, Key, Rect},
+    egui::{self, Key, Rect, Vec2, ViewportCommand},
     epaint::CornerRadius,
 };
 use muda::{
@@ -14,8 +14,7 @@ use crate::{
     save_file::NUM_QUICK_SAVE_SLOTS,
 };
 
-/// Size in pixels of a single gb pixel
-const PIXEL_SCALE: usize = 4;
+const DEFAULT_SCALE_FACTOR: f32 = 4.0;
 
 pub fn start_gui(commands_tx: Sender<Command>, output_buffer: SharedOutputBuffer) {
     eframe::run_native(
@@ -23,11 +22,11 @@ pub fn start_gui(commands_tx: Sender<Command>, output_buffer: SharedOutputBuffer
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([
-                    (SCREEN_WIDTH * PIXEL_SCALE) as f32,
-                    (SCREEN_HEIGHT * PIXEL_SCALE) as f32,
+                    (SCREEN_WIDTH as f32) * DEFAULT_SCALE_FACTOR,
+                    (SCREEN_HEIGHT as f32) * DEFAULT_SCALE_FACTOR,
                 ])
+                .with_min_inner_size([SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32])
                 .with_active(true)
-                .with_resizable(false)
                 .with_title_shown(true),
             ..Default::default()
         },
@@ -67,6 +66,7 @@ impl GuiApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 SAVE_ITEM_ID => self.commands_tx.send(Command::Save).unwrap(),
+                RESIZE_TO_FIT_ITEM_ID => self.resize_to_fit(ctx),
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
                         let slot = usize::from_str(slot_number).unwrap();
@@ -129,6 +129,8 @@ impl GuiApp {
     }
 
     fn draw_screen(&mut self, ctx: &egui::Context) {
+        let scale_factor = self.calculate_scale_factor(ctx);
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let painter = ui.painter();
 
@@ -137,8 +139,8 @@ impl GuiApp {
                     let color = self.pixels.read_pixel(x, y);
                     painter.rect_filled(
                         Rect::from_x_y_ranges(
-                            ((x * PIXEL_SCALE) as f32)..=((x + 1) * PIXEL_SCALE) as f32,
-                            ((y * PIXEL_SCALE) as f32)..=((y + 1) * PIXEL_SCALE) as f32,
+                            ((x as f32) * scale_factor)..=((x as f32 + 1.0) * scale_factor),
+                            ((y as f32) * scale_factor)..=((y as f32 + 1.0) * scale_factor),
                         ),
                         CornerRadius::ZERO,
                         color,
@@ -146,6 +148,26 @@ impl GuiApp {
                 }
             }
         });
+    }
+
+    fn calculate_scale_factor(&self, ctx: &egui::Context) -> f32 {
+        let viewport_rect = ctx.viewport_rect();
+
+        let width_scale = viewport_rect.width() / (SCREEN_WIDTH as f32);
+        let height_scale = viewport_rect.height() / (SCREEN_HEIGHT as f32);
+
+        width_scale.min(height_scale)
+    }
+
+    fn resize_to_fit(&self, ctx: &egui::Context) {
+        let scale_factor = self.calculate_scale_factor(ctx);
+
+        let new_size = Vec2::new(
+            scale_factor * (SCREEN_WIDTH as f32),
+            scale_factor * (SCREEN_HEIGHT as f32),
+        );
+
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(new_size));
     }
 }
 
@@ -163,6 +185,7 @@ impl eframe::App for GuiApp {
 
 const QUIT_ITEM_ID: &str = "quit";
 const SAVE_ITEM_ID: &str = "save";
+const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
 const QUICK_SAVE_ITEM_ID_PREFIX: &str = "quick_save_";
 const LOAD_QUICK_SAVE_ITEM_ID_PREFIX: &str = "load_quick_save_";
 
@@ -226,8 +249,21 @@ fn create_app_menu() -> Menu {
     )
     .unwrap();
 
+    let window_menu = Submenu::with_items(
+        "Window",
+        true,
+        &[&MenuItem::with_id(
+            RESIZE_TO_FIT_ITEM_ID,
+            "Resize to Fit",
+            true,
+            Some(Accelerator::new(Some(Modifiers::META), Code::KeyF)),
+        )],
+    )
+    .unwrap();
+
     menu.append(&app_name_menu).unwrap();
     menu.append(&emulator_menu).unwrap();
+    menu.append(&window_menu).unwrap();
 
     #[cfg(target_os = "macos")]
     menu.init_for_nsapp();
