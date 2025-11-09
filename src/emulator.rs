@@ -611,7 +611,7 @@ impl Emulator {
             self.microframe += self.microframes_per_frame();
 
             // Target time (since start) to run the next frame
-            let next_frame_time_nanos = self.expected_frame_start_nanos();
+            let mut next_frame_time_nanos = self.expected_frame_start_nanos();
 
             // Current time (since start)
             let current_time = Instant::now();
@@ -627,7 +627,29 @@ impl Emulator {
                 self.save_cartridge_state_to_disk();
             }
 
-            if next_frame_time_nanos <= current_time_nanos {
+            if self.options.log_frames {
+                println!(
+                    "[FRAME] Frame end at {}ns, frame {}, {:.2}% of frame budget used",
+                    current_time_nanos,
+                    self.format_frame_number(self.microframe - self.microframes_per_frame()),
+                    ((current_time_nanos - frame_start_nanos) as f64 / self.ns_per_frame()) * 100.0
+                );
+            }
+
+            // Schedule the next frame and sleep until then
+            if next_frame_time_nanos > current_time_nanos {
+                // Calculate how long to sleep until the next frame
+                let nanos_to_next_frame = next_frame_time_nanos - current_time_nanos;
+
+                thread::sleep(Duration::from_nanos(
+                    nanos_to_next_frame.saturating_sub(self.ns_per_frame() as u64 / 20),
+                ));
+
+                continue;
+            }
+
+            // Skip frames whose expected start time has already passed
+            while next_frame_time_nanos <= current_time_nanos {
                 if self.options.log_frames {
                     println!(
                         "[FRAME] Missed frame {} by {}ns",
@@ -636,26 +658,11 @@ impl Emulator {
                     );
                 }
 
-                // We're late for the next frame, so skip sleeping
-                continue;
-            } else {
-                // Calculate how long to sleep until the next frame
-                let nanos_to_next_frame = next_frame_time_nanos - current_time_nanos;
-
-                if self.options.log_frames {
-                    println!(
-                        "[FRAME] Frame end at {}ns, frame {}, {:.2}% of frame budget used",
-                        current_time_nanos,
-                        self.format_frame_number(self.microframe - self.microframes_per_frame()),
-                        ((current_time_nanos - frame_start_nanos) as f64 / self.ns_per_frame())
-                            * 100.0
-                    );
-                }
-
-                thread::sleep(Duration::from_nanos(
-                    nanos_to_next_frame.saturating_sub(self.ns_per_frame() as u64 / 20),
-                ));
+                self.microframe += self.microframes_per_frame();
+                next_frame_time_nanos = self.expected_frame_start_nanos();
             }
+
+            // Continue directly to the next frame, starting it early since a frame was skipped
         }
     }
 
