@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::address_space::SINGLE_VRAM_BANK_SIZE;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum Machine {
     /// The original GameBoy
     Dmg,

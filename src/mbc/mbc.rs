@@ -6,6 +6,7 @@ use crate::{
 /// Memory Bank Controllers map the ROM and RAM banks into the GameBoy's address space.
 ///
 /// The may contain internal registers or additional features.
+#[typetag::serde(tag = "type")]
 pub trait Mbc {
     fn kind(&self) -> MbcKind;
 

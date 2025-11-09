@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::emulator::{Emulator, SCREEN_WIDTH};
 
 /// A sprite in OAM.
@@ -139,6 +141,7 @@ fn background_or_window_color_index(emulator: &mut Emulator, x: u8, y: u8) -> Op
 
 /// An internal counter used for tracking the tilemap line number for the window. Only incremented
 /// when the window itself is rendered on a scanline, instead of incrementing every scanline.
+#[derive(Serialize, Deserialize)]
 pub struct WindowLineCounter {
     /// The value of the counter
     line: u8,

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{
     address_space::{
         Address, EXTERNAL_RAM_START, FIRST_ROM_BANK_END, ROM_BANK_SIZE,
@@ -6,6 +8,7 @@ use crate::{
     mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
 };
 
+#[derive(Serialize, Deserialize)]
 pub struct Mbc1 {
     /// RAM Enable Register (0000–1FFF)
     is_ram_enabled: bool,
@@ -100,6 +103,7 @@ impl Mbc1 {
     }
 }
 
+#[typetag::serde]
 impl Mbc for Mbc1 {
     fn kind(&self) -> MbcKind {
         MbcKind::Mbc1

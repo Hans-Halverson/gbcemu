@@ -1,8 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{
     address_space::{Address, EXTERNAL_RAM_START},
     mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
 };
 
+#[derive(Serialize, Deserialize)]
 pub struct NoMbc;
 
 impl NoMbc {
@@ -13,6 +16,7 @@ impl NoMbc {
     }
 }
 
+#[typetag::serde]
 impl Mbc for NoMbc {
     fn kind(&self) -> MbcKind {
         MbcKind::None

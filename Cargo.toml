@@ -6,4 +6,14 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.49", features = ["derive"] }
 concat-idents = "1.1.5"
+
+# GUI libraries
 eframe = "0.33.0"
+muda = "0.17.1"
+
+# Serialization libraries
+rmp-serde = "1.3.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde-big-array = "0.5.1"
+serde_bytes = "0.11.19"
+typetag = "0.2.21"

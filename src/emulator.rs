@@ -2,13 +2,16 @@ use std::{
     array,
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU32, Ordering},
+        atomic::{AtomicU32, Ordering},
+        mpsc::Receiver,
     },
     thread,
     time::{Duration, Instant},
 };
 
 use eframe::egui::Color32;
+use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 
 use crate::{
     address_space::{
@@ -26,6 +29,7 @@ use crate::{
     options::Options,
     ppu::{Color, WindowLineCounter, draw_scanline},
     registers::Registers,
+    save_file::{NUM_QUICK_SAVE_SLOTS, SAVE_FILE_AUTO_FLUSH_INTERVAL_SECS, SaveFile},
 };
 
 /// Width of the gameboy screen in pixels
@@ -87,24 +91,24 @@ pub enum Button {
 
 type ButtonSet = u8;
 
-#[derive(Clone)]
 pub struct SharedInputAdapter {
-    pressed_buttons: Arc<AtomicU8>,
+    commands_rx: Receiver<Command>,
+}
+
+pub enum Command {
+    /// Send a new set of pressed buttons encoded as a byte
+    UpdatePressedButtons(u8),
+    /// Save the entire emulator state to disk
+    Save,
+    /// Save emulator state into the given quick save slot
+    QuickSave(usize),
+    /// Load a quick save from the given slot
+    LoadQuickSave(usize),
 }
 
 impl SharedInputAdapter {
-    pub fn new() -> Self {
-        Self {
-            pressed_buttons: Arc::new(AtomicU8::new(0)),
-        }
-    }
-
-    fn get_pressed_buttons(&self) -> u8 {
-        self.pressed_buttons.load(Ordering::Relaxed)
-    }
-
-    pub fn set_pressed_buttons(&mut self, buttons: u8) {
-        self.pressed_buttons.store(buttons, Ordering::Relaxed);
+    pub fn new(commands_rx: Receiver<Command>) -> Self {
+        Self { commands_rx }
     }
 }
 
@@ -152,7 +156,7 @@ const OAM_DMA_TRANSFER_TICKS: usize = 640;
 /// Nanoseconds in real time per frame
 const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum Mode {
     /// Mode 0: Move to the next scanline
     HBlank,
@@ -224,6 +228,7 @@ impl Interrupt {
 
 /// The `ei` instruction enables interrupts after the next instruction completes. Use a small state
 /// machine to simulate this.
+#[derive(Serialize, Deserialize)]
 enum PendingEnableInterrupt {
     None,
     AfterNextInstruction,
@@ -233,6 +238,7 @@ enum PendingEnableInterrupt {
     },
 }
 
+#[derive(Serialize, Deserialize)]
 struct OamDmaTransfer {
     /// The source address which data is copied from into OAM
     source_address: Address,
@@ -245,23 +251,39 @@ const TAC_MASK_64_TICKS: u16 = 0x0020;
 const TAC_MASK_256_TICKS: u16 = 0x0080;
 const TAC_MASK_1024_TICKS: u16 = 0x0200;
 
+#[derive(Serialize, Deserialize)]
 pub struct Emulator {
     /// Cartridge inserted
     cartridge: Cartridge,
 
     /// Options for the emulator
+    #[serde(skip)]
     options: Arc<Options>,
 
     /// Input adapter for reading button presses from the GUI thread
-    input_adapter: SharedInputAdapter,
+    #[serde(skip)]
+    input_adapter: Option<SharedInputAdapter>,
 
     /// Output buffer for the screen which is shared with the GUI thread
-    output_buffer: SharedOutputBuffer,
+    #[serde(skip)]
+    output_buffer: Option<SharedOutputBuffer>,
+
+    /// The save file for this ROM, if any
+    #[serde(skip)]
+    save_file: Option<Box<SaveFile>>,
+
+    /// The path to write the save file to disk, if any
+    #[serde(skip)]
+    save_file_path: Option<String>,
+
+    /// The machine type being emulated (DMG or CGB)
+    machine: Machine,
 
     /// Current tick (T-cycle) within a frame
     tick: u32,
 
     /// Current frame number
+    #[serde(skip)]
     frame: u64,
 
     /// Current (virtual) scanline number
@@ -274,15 +296,19 @@ pub struct Emulator {
     in_cgb_mode: bool,
 
     /// VRAM region, including all banks
+    #[serde(with = "serde_bytes")]
     vram: Vec<u8>,
 
     /// OAM region (Object Attribute Memory)
+    #[serde(with = "serde_bytes")]
     oam: Vec<u8>,
 
     /// HRAM region (High RAM)
+    #[serde(with = "serde_bytes")]
     hram: Vec<u8>,
 
     /// Work RAM region, including all banks
+    #[serde(with = "serde_bytes")]
     work_ram: Vec<u8>,
 
     /// Register file
@@ -323,15 +349,79 @@ pub struct Emulator {
     is_timer_enabled: bool,
 }
 
+pub struct EmulatorBuilder {
+    emulator: Emulator,
+}
+
+impl EmulatorBuilder {
+    fn new(emulator: Emulator) -> Self {
+        EmulatorBuilder { emulator }
+    }
+
+    pub fn new_cartridge(cartridge: Cartridge, machine: Machine) -> Self {
+        let mut emulator = Emulator::initial_state(cartridge, machine);
+        emulator.save_file = Some(Box::new(SaveFile::new(emulator.cartridge())));
+
+        Self::new(emulator)
+    }
+
+    pub fn from_saved_cartidge(save_file: Box<SaveFile>, machine: Machine) -> Self {
+        let cartridge = rmp_serde::from_slice(&save_file.cartridge).unwrap();
+
+        let mut emulator = Emulator::initial_state(cartridge, machine);
+        emulator.save_file = Some(save_file);
+
+        Self::new(emulator)
+    }
+
+    pub fn from_quick_save_bytes(save_file: Box<SaveFile>, serialized_bytes: &[u8]) -> Self {
+        let mut emulator: Emulator = rmp_serde::from_slice(serialized_bytes).unwrap();
+        emulator.save_file = Some(save_file);
+
+        Self::new(emulator)
+    }
+
+    pub fn with_options(mut self, options: Arc<Options>) -> Self {
+        self.emulator.options = options;
+        self
+    }
+
+    pub fn with_save_file_path(mut self, save_file_path: String) -> Self {
+        self.emulator.save_file_path = Some(save_file_path);
+        self
+    }
+
+    pub fn with_input_adapter(mut self, input_adapter: SharedInputAdapter) -> Self {
+        self.emulator.input_adapter = Some(input_adapter);
+        self
+    }
+
+    pub fn with_output_buffer(mut self, output_buffer: SharedOutputBuffer) -> Self {
+        self.emulator.output_buffer = Some(output_buffer);
+        self
+    }
+
+    pub fn build(self) -> Emulator {
+        self.emulator
+    }
+}
+
 impl Emulator {
-    pub fn new(cartridge: Cartridge, machine: Machine, options: Arc<Options>) -> Self {
+    /// The initial state of the emulator for a given cartridge and machine type.
+    ///
+    /// Initialized to the standard state after the BIOS has run and the cartridge entry point code
+    /// is ready to execute.
+    fn initial_state(cartridge: Cartridge, machine: Machine) -> Self {
         let is_cgb = cartridge.is_cgb();
 
         Emulator {
             cartridge,
-            options,
-            input_adapter: SharedInputAdapter::new(),
-            output_buffer: SharedOutputBuffer::new(),
+            options: Arc::new(Options::default()),
+            input_adapter: None,
+            output_buffer: None,
+            save_file: None,
+            save_file_path: None,
+            machine,
             tick: 0,
             frame: 0,
             scanline: 0,
@@ -354,6 +444,10 @@ impl Emulator {
             tac_mask: TAC_MASK_1024_TICKS,
             is_timer_enabled: false,
         }
+    }
+
+    pub fn cartridge(&self) -> &Cartridge {
+        &self.cartridge
     }
 
     pub fn scanline(&self) -> u8 {
@@ -444,17 +538,14 @@ impl Emulator {
         self.tac_mask = tac_mask;
     }
 
-    pub fn clone_input_adapter(&self) -> SharedInputAdapter {
-        self.input_adapter.clone()
-    }
-
-    pub fn clone_output_buffer(&self) -> SharedOutputBuffer {
+    pub fn clone_output_buffer(&self) -> Option<SharedOutputBuffer> {
         self.output_buffer.clone()
     }
 
     /// Run the emulator at the GameBoy's native framerate
     pub fn run(&mut self) {
         let start_time = Instant::now();
+        let mut last_save_file_flush_time = Instant::now();
 
         loop {
             let frame_start_nanos = duration_to_nanos(Instant::now().duration_since(start_time));
@@ -482,6 +573,16 @@ impl Emulator {
             // Current time (since start)
             let current_time = Instant::now();
             let current_time_nanos = duration_to_nanos(current_time.duration_since(start_time));
+
+            // Flush the save file to disk at regular intervals
+            if current_time
+                .duration_since(last_save_file_flush_time)
+                .as_secs()
+                >= SAVE_FILE_AUTO_FLUSH_INTERVAL_SECS
+            {
+                last_save_file_flush_time = Instant::now();
+                self.save_cartridge_state_to_disk();
+            }
 
             if next_frame_time_nanos <= current_time_nanos {
                 if self.options.log_frames {
@@ -639,8 +740,75 @@ impl Emulator {
     }
 
     fn handle_inputs(&mut self) {
-        // Check if there are any different pressed buttons
-        let new_pressed_buttons = self.input_adapter.get_pressed_buttons();
+        if self.input_adapter.is_none() {
+            return;
+        }
+
+        while let Ok(command) = self.input_adapter.as_ref().unwrap().commands_rx.try_recv() {
+            match command {
+                Command::UpdatePressedButtons(new_pressed_buttons) => {
+                    self.handle_update_pressed_buttons(new_pressed_buttons)
+                }
+                Command::Save => self.save_cartridge_state_to_disk(),
+                Command::QuickSave(slot) => self.quick_save(slot),
+                Command::LoadQuickSave(slot) => self.load_quick_save(slot),
+            }
+        }
+    }
+
+    fn quick_save(&mut self, slot: usize) {
+        if slot >= NUM_QUICK_SAVE_SLOTS || self.save_file.is_none() {
+            return;
+        }
+
+        let emulator_bytes = rmp_serde::to_vec(self).unwrap();
+
+        let save_file = self.save_file.as_mut().unwrap();
+        save_file.quick_saves[slot] = Some(ByteBuf::from(emulator_bytes));
+
+        if let Some(save_file_path) = &mut self.save_file_path {
+            save_file.flush_to_disk(save_file_path);
+        }
+    }
+
+    fn load_quick_save(&mut self, slot: usize) {
+        if slot >= NUM_QUICK_SAVE_SLOTS
+            || self.save_file.is_none()
+            || self.save_file.as_ref().unwrap().quick_saves[slot].is_none()
+        {
+            return;
+        }
+
+        // Deserialize emulator state
+        let save_file = self.save_file.take().unwrap();
+        let serialized_bytes = save_file.quick_saves[slot].as_ref().unwrap().to_vec();
+
+        // Some state was not included in serialization and must be preserved
+        let frame = self.frame;
+
+        let mut emulator_builder =
+            EmulatorBuilder::from_quick_save_bytes(save_file, &serialized_bytes)
+                .with_options(self.options.clone());
+
+        if let Some(save_file_path) = self.save_file_path.take() {
+            emulator_builder = emulator_builder.with_save_file_path(save_file_path);
+        }
+
+        if let Some(input_adapter) = self.input_adapter.take() {
+            emulator_builder = emulator_builder.with_input_adapter(input_adapter);
+        }
+
+        if let Some(output_buffer) = self.output_buffer.take() {
+            emulator_builder = emulator_builder.with_output_buffer(output_buffer);
+        }
+
+        *self = emulator_builder.build();
+
+        // Restore state excluded from quick save
+        self.frame = frame;
+    }
+
+    fn handle_update_pressed_buttons(&mut self, new_pressed_buttons: u8) {
         if self.pressed_buttons == new_pressed_buttons {
             return;
         }
@@ -711,12 +879,22 @@ impl Emulator {
         result
     }
 
+    fn save_cartridge_state_to_disk(&mut self) {
+        if let (Some(save_file), Some(save_file_path)) = (&mut self.save_file, &self.save_file_path)
+        {
+            save_file.update_cartridge_state(&self.cartridge);
+            save_file.flush_to_disk(save_file_path);
+        }
+    }
+
     pub fn write_color(&self, x: u8, y: u8, color: Color) {
-        self.output_buffer.write_pixel(
-            x as usize,
-            y as usize,
-            SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
-        );
+        if let Some(output_buffer) = &self.output_buffer {
+            output_buffer.write_pixel(
+                x as usize,
+                y as usize,
+                SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
+            );
+        }
     }
 
     /// Read a byte from the given virtual address.

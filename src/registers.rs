@@ -1,5 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use crate::machine::Machine;
 
+#[derive(Serialize, Deserialize)]
 pub struct Registers {
     /// Program counter, address of the next instruction to execute
     pc: u16,

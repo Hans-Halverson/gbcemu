@@ -1,5 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     address_space::{
         Address, EXTERNAL_RAM_START, FIRST_ROM_BANK_END, ROM_BANK_SIZE,
@@ -8,6 +10,7 @@ use crate::{
     mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
 };
 
+#[derive(Serialize, Deserialize)]
 pub struct Mbc3 {
     /// RAM & RTC Enable Register (0000–2000)
     is_ram_rtc_enabled: bool,
@@ -22,6 +25,7 @@ pub struct Mbc3 {
     last_latched_write: Option<u8>,
 }
 
+#[derive(Serialize, Deserialize)]
 enum RtcRegister {
     Seconds,
     Minutes,
@@ -30,6 +34,7 @@ enum RtcRegister {
     DayHigh,
 }
 
+#[derive(Serialize, Deserialize)]
 enum RamRtcMapping {
     RamBank(u8),
     RtcRegister(RtcRegister),
@@ -99,6 +104,7 @@ impl Mbc3 {
     }
 }
 
+#[typetag::serde]
 impl Mbc for Mbc3 {
     fn kind(&self) -> MbcKind {
         MbcKind::Mbc3

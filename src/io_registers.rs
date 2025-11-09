@@ -1,4 +1,5 @@
 use concat_idents::concat_idents;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     address_space::{Address, IO_REGISTERS_SIZE},
@@ -9,7 +10,9 @@ use crate::{
 /// File containing all IO registers.
 type IoRegisterFile = [Register; IO_REGISTERS_SIZE];
 
+#[derive(Serialize, Deserialize)]
 pub struct IoRegisters {
+    #[serde(with = "serde_big_array::BigArray")]
     registers: IoRegisterFile,
 }
 

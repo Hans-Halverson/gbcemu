@@ -1,10 +1,11 @@
 use clap::Parser;
 use gbcemu::{
     cartridge::Cartridge,
-    emulator::{Emulator, SharedInputAdapter, SharedOutputBuffer},
+    emulator::{EmulatorBuilder, SharedInputAdapter, SharedOutputBuffer},
     gui::start_gui,
     machine::Machine,
     options::{Args, Options},
+    save_file::SAVE_FILE_EXTENSION,
 };
 
 use std::{
@@ -12,25 +13,23 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+/// The only supported ROM file extension.
+const GB_FILE_EXTENSION: &str = ".gb";
+
 fn main() {
     let args = Args::parse();
     let options = Arc::new(Options::from_args(&args));
 
-    let rom_bytes = read_file(&args.rom);
-    let cartridge = Cartridge::new_from_rom_bytes(rom_bytes);
+    let (commands_tx, commands_rx) = channel();
 
-    let machine = if args.cgb { Machine::Cgb } else { Machine::Dmg };
+    let input_adapter = SharedInputAdapter::new(commands_rx);
+    let output_buffer = SharedOutputBuffer::new();
 
-    if args.dump_rom_info {
-        println!("{:?}", cartridge);
-        return;
-    }
+    let emulator_thread =
+        start_emulator_thread(&args, options.clone(), input_adapter, output_buffer.clone());
 
-    let (emulator_thread, (shared_input_adapter, shared_output_buffer)) =
-        start_emulator_thread(options.clone(), cartridge, machine);
-
-    if !args.headless {
-        start_gui(shared_input_adapter, shared_output_buffer);
+    if !args.headless && !args.dump_rom_info {
+        start_gui(commands_tx, output_buffer);
     } else {
         emulator_thread.join().unwrap();
     }
@@ -40,24 +39,52 @@ fn read_file(path: &str) -> Vec<u8> {
     std::fs::read(path).expect("Failed to read file")
 }
 
-/// Start the emulator in a separate thread and return a buffer where results can be written that
-/// can be shared across threads.
 fn start_emulator_thread(
+    args: &Args,
     options: Arc<Options>,
-    cartridge: Cartridge,
-    machine: Machine,
-) -> (JoinHandle<()>, (SharedInputAdapter, SharedOutputBuffer)) {
-    let (sender, receiver) = channel();
+    input_adapter: SharedInputAdapter,
+    output_buffer: SharedOutputBuffer,
+) -> JoinHandle<()> {
+    let machine = if args.cgb { Machine::Cgb } else { Machine::Dmg };
+    let rom_or_save_path = args.rom_or_save.clone();
+    let dump_rom_info = args.dump_rom_info;
 
-    let emulator_thread = thread::spawn(move || {
-        let mut emulator = Box::new(Emulator::new(cartridge, machine, options));
+    thread::spawn(move || {
+        let emulator_builder = if rom_or_save_path.ends_with(SAVE_FILE_EXTENSION) {
+            let save_file_bytes = read_file(&rom_or_save_path);
+            let save_file = rmp_serde::from_slice(&save_file_bytes)
+                .expect("Could not read save file, save file format may have changed");
 
-        let input_adapter = emulator.clone_input_adapter();
-        let output_buffer = emulator.clone_output_buffer();
+            EmulatorBuilder::from_saved_cartidge(save_file, machine)
+                .with_save_file_path(rom_or_save_path)
+        } else if rom_or_save_path.ends_with(GB_FILE_EXTENSION) {
+            let rom_bytes = read_file(&rom_or_save_path);
+            let cartridge = Cartridge::new_from_rom_bytes(rom_bytes);
 
-        sender.send((input_adapter, output_buffer)).unwrap();
+            let save_file_path = rom_or_save_path
+                .trim_end_matches(GB_FILE_EXTENSION)
+                .to_string()
+                + SAVE_FILE_EXTENSION;
+
+            EmulatorBuilder::new_cartridge(cartridge, machine).with_save_file_path(save_file_path)
+        } else {
+            panic!(
+                "Unsupported file type, file must have {} or {} extension",
+                GB_FILE_EXTENSION, SAVE_FILE_EXTENSION
+            );
+        };
+
+        let mut emulator = emulator_builder
+            .with_options(options)
+            .with_input_adapter(input_adapter)
+            .with_output_buffer(output_buffer)
+            .build();
+
+        if dump_rom_info {
+            println!("{:?}", emulator.cartridge());
+            return;
+        }
+
         emulator.run();
-    });
-
-    (emulator_thread, receiver.recv().unwrap())
+    })
 }

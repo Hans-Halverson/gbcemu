@@ -23,9 +23,9 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub test: bool,
 
-    /// ROM file to run
+    /// ROM or save file to run
     #[arg(required = true)]
-    pub rom: String,
+    pub rom_or_save: String,
 }
 
 pub struct Options {

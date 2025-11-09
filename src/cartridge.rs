@@ -1,5 +1,7 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     address_space::{ROM_BANK_SIZE, SINGLE_EXTERNAL_RAM_BANK_SIZE},
     mbc::mbc::{Mbc, MbcKind, create_mbc},
@@ -44,11 +46,14 @@ const NINTENDO_LOGO: [u8; 48] = [
     0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
 ];
 
+#[derive(Serialize, Deserialize)]
 pub struct Cartridge {
     /// Raw ROM data
+    #[serde(with = "serde_bytes")]
     rom: Vec<u8>,
 
     /// RAM for this cartridge
+    #[serde(with = "serde_bytes")]
     ram: Vec<u8>,
 
     /// Memory Bank Controller for this cartridge
