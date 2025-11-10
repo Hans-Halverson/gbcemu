@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     address_space::{Address, IO_REGISTERS_SIZE},
-    emulator::{Emulator, Register},
+    emulator::{Emulator, Register, VRAM_READ_FAILED_VALUE},
     machine::Machine,
 };
 
@@ -76,6 +76,13 @@ impl Emulator {
         self.io_regs_mut().as_slice_mut()[offset(address)] = value;
     }
 
+    fn read_from_write_only_register(&self, address: Address) -> Register {
+        panic!(
+            "Attempted to read from write-only register at address {:04X}",
+            address
+        );
+    }
+
     fn write_to_read_only_register(&mut self, address: Address, _: Register) {
         panic!(
             "Attempted to write to read-only register at address {:04X}",
@@ -111,7 +118,16 @@ impl Emulator {
         is_bit_set(self.lcdc_raw(), 1)
     }
 
-    pub fn is_lcdc_bg_window_enabled(&self) -> bool {
+    /// In DMG mode this bit controls whether the background and window are enabled.
+    pub fn is_lcdc_dmg_bg_window_enabled(&self) -> bool {
+        is_bit_set(self.lcdc_raw(), 0)
+    }
+
+    /// In CGB mode this bit controls whether the background and window may be displayed on top of
+    /// objects (depending on object vs background priority attributes).
+    ///
+    /// Otherwise background and window are always displayed below objects.
+    pub fn is_lcdc_cgb_bg_window_priority(&self) -> bool {
         is_bit_set(self.lcdc_raw(), 0)
     }
 
@@ -204,9 +220,121 @@ impl Emulator {
         self.scanline()
     }
 
+    fn write_key0_impl(&mut self, _: Address, value: Register) {
+        // Writes are only allowed while booting
+        if self.is_booting() && self.is_cgb_machine() {
+            self.set_in_cgb_mode(!is_bit_set(value, 2));
+
+            // Only write bit 2, leaving other bits set. This allows raw reads.
+            self.write_key0_raw(0xFB | (value & 0x04));
+        }
+    }
+
+    fn write_key1_impl(&mut self, _: Address, _: Register) {
+        unimplemented!("write to KEY1 register")
+    }
+
     fn write_vbk_impl(&mut self, _: Address, value: Register) {
         // Only write bottom bit, leaving top 7 bits set. This allows raw reads.
         self.write_vbk_raw(0xFE | (0x01 & value));
+    }
+
+    fn write_bank_impl(&mut self, _: Address, _: Register) {
+        self.set_is_booting(false);
+    }
+
+    fn write_hdma1_impl(&mut self, _: Address, _: Register) {
+        unimplemented!("write to HDMA1 register")
+    }
+
+    fn write_hdma2_impl(&mut self, _: Address, _: Register) {
+        unimplemented!("write to HDMA2 register")
+    }
+
+    fn write_hdma3_impl(&mut self, _: Address, _: Register) {
+        unimplemented!("write to HDMA3 register")
+    }
+
+    fn write_hdma4_impl(&mut self, _: Address, _: Register) {
+        unimplemented!("write to HDMA4 register")
+    }
+
+    fn read_hdma5_impl(&self, _: Address) -> Register {
+        unimplemented!("read from HDMA5 register")
+    }
+
+    fn write_hdma5_impl(&mut self, _: Address, _: Register) {
+        unimplemented!("write to HDMA5 register")
+    }
+
+    fn cgb_pallette_address(reg: Register) -> usize {
+        // Lower 6 bits of both BCPS and OCPS are the byte address
+        (reg & 0x3F) as usize
+    }
+
+    fn cgb_pallete_auto_increment(reg: Register) -> bool {
+        // Bit 7 of both BCPS and OCPS is the auto-increment flag
+        is_bit_set(reg, 7)
+    }
+
+    fn read_bcpd_impl(&self, _: Address) -> Register {
+        // Reads fail when VRAM cannot be accessed, returning undefined data (usually 0xFF)
+        if self.can_access_vram() {
+            return VRAM_READ_FAILED_VALUE;
+        }
+
+        // Reads fail during draw mode returning undefined data, usually 0xFF
+        self.cgb_background_palettes()[Self::cgb_pallette_address(self.bcps_raw())]
+    }
+
+    fn write_bcpd_impl(&mut self, _: Address, value: Register) {
+        let bcps = self.bcps_raw();
+        let address = Self::cgb_pallette_address(bcps);
+
+        // Writes are ignored when VRAM cannot be accessed
+        if self.can_access_vram() {
+            let address = Self::cgb_pallette_address(bcps);
+            self.cgb_background_palettes_mut()[address] = value;
+        }
+
+        // Auto-increment address if needed, even if write failed
+        if Self::cgb_pallete_auto_increment(bcps) {
+            let new_bcps = (bcps & 0x80) | (address as u8 + 1);
+            self.write_bcps_raw(new_bcps);
+        }
+    }
+
+    fn read_ocpd_impl(&self, _: Address) -> Register {
+        // Reads fail when VRAM cannot be accessed, returning undefined data (usually 0xFF)
+        if self.can_access_vram() {
+            return VRAM_READ_FAILED_VALUE;
+        }
+
+        self.cgb_object_palettes()[Self::cgb_pallette_address(self.ocps_raw())]
+    }
+
+    fn write_ocpd_impl(&mut self, _: Address, value: Register) {
+        let ocps = self.ocps_raw();
+        let address = Self::cgb_pallette_address(ocps);
+
+        // Writes are ignored when VRAM cannot be accessed
+        if self.can_access_vram() {
+            self.cgb_object_palettes_mut()[address] = value;
+        }
+
+        // Auto-increment address if needed, even if write failed
+        if Self::cgb_pallete_auto_increment(ocps) {
+            let new_ocps = (ocps & 0x80) | (address as u8 + 1);
+            self.write_ocps_raw(new_ocps);
+        }
+    }
+
+    fn write_opri_impl(&mut self, _: Address, value: Register) {
+        // Writes are ignored after booting
+        if self.is_booting() {
+            // Only write bottom bit, leaving top 7 bits unset. This allows raw reads.
+            self.write_opri_raw(0x01 & value);
+        }
     }
 
     fn write_wbk_impl(&mut self, _: Address, value: Register) {
@@ -299,7 +427,7 @@ macro_rules! define_registers {
 /// Register is not present on this system
 const NONE: u8 = 0xFF;
 
-/// Register has an arbitrary initial value (depends on boot ROM's duration)
+/// Register has an arbitrary initial value (e.g. depends on boot ROM's duration or header contents)
 const VARIABLE: u8 = 0xFF;
 
 /// Register is unitialized
@@ -416,6 +544,89 @@ define_registers!(
         read_register_raw,
         write_register_raw
     ),
+    (
+        key0,
+        0xFF4C,
+        NONE,
+        VARIABLE,
+        read_register_raw,
+        write_key0_impl
+    ),
+    (
+        key1,
+        0xFF4D,
+        NONE,
+        VARIABLE,
+        read_register_raw,
+        write_key1_impl
+    ),
     (vbk, 0xFF4F, NONE, 0xFE, read_register_raw, write_vbk_impl),
+    (bank, 0xFF50, NONE, NONE, read_register_raw, write_bank_impl),
+    (
+        hdma1,
+        0xFF51,
+        NONE,
+        0xFF,
+        read_from_write_only_register,
+        write_hdma1_impl
+    ),
+    (
+        hdma2,
+        0xFF52,
+        NONE,
+        0xFF,
+        read_from_write_only_register,
+        write_hdma2_impl
+    ),
+    (
+        hdma3,
+        0xFF53,
+        NONE,
+        0xFF,
+        read_from_write_only_register,
+        write_hdma3_impl
+    ),
+    (
+        hdma4,
+        0xFF54,
+        NONE,
+        0xFF,
+        read_from_write_only_register,
+        write_hdma4_impl
+    ),
+    (hdma5, 0xFF55, NONE, 0xFF, read_hdma5_impl, write_hdma5_impl),
+    (
+        bcps,
+        0xFF68,
+        NONE,
+        VARIABLE,
+        read_register_raw,
+        write_register_raw
+    ),
+    (
+        bcpd,
+        0xFF69,
+        NONE,
+        VARIABLE,
+        read_bcpd_impl,
+        write_bcpd_impl
+    ),
+    (
+        ocps,
+        0xFF6A,
+        NONE,
+        VARIABLE,
+        read_register_raw,
+        write_register_raw
+    ),
+    (
+        ocpd,
+        0xFF6B,
+        NONE,
+        VARIABLE,
+        read_ocpd_impl,
+        write_ocpd_impl
+    ),
+    (opri, 0xFF6C, NONE, 0x00, read_register_raw, write_opri_impl),
     (wbk, 0xFF70, NONE, 0xF8, read_register_raw, write_wbk_impl),
 );

@@ -3,7 +3,6 @@ pub mod cartridge;
 mod cpu;
 pub mod emulator;
 pub mod gui;
-mod initialization;
 mod io_registers;
 pub mod machine;
 mod mbc;

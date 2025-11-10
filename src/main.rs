@@ -13,8 +13,9 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-/// The only supported ROM file extension.
+// The only supported ROM file extensions
 const GB_FILE_EXTENSION: &str = ".gb";
+const GBC_FILE_EXTENSION: &str = ".gbc";
 
 fn main() {
     let args = Args::parse();
@@ -57,20 +58,23 @@ fn start_emulator_thread(
 
             EmulatorBuilder::from_saved_cartidge(save_file, machine)
                 .with_save_file_path(rom_or_save_path)
-        } else if rom_or_save_path.ends_with(GB_FILE_EXTENSION) {
+        } else if rom_or_save_path.ends_with(GB_FILE_EXTENSION)
+            || rom_or_save_path.ends_with(GBC_FILE_EXTENSION)
+        {
             let rom_bytes = read_file(&rom_or_save_path);
             let cartridge = Cartridge::new_from_rom_bytes(rom_bytes);
 
             let save_file_path = rom_or_save_path
                 .trim_end_matches(GB_FILE_EXTENSION)
+                .trim_end_matches(GBC_FILE_EXTENSION)
                 .to_string()
                 + SAVE_FILE_EXTENSION;
 
             EmulatorBuilder::new_cartridge(cartridge, machine).with_save_file_path(save_file_path)
         } else {
             panic!(
-                "Unsupported file type, file must have {} or {} extension",
-                GB_FILE_EXTENSION, SAVE_FILE_EXTENSION
+                "Unsupported file type, file must have {}, {}, or {} extension",
+                GB_FILE_EXTENSION, GBC_FILE_EXTENSION, SAVE_FILE_EXTENSION
             );
         };
 

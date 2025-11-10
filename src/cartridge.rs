@@ -70,8 +70,8 @@ pub struct Cartridge {
     /// Cartridge type byte
     cartridge_type_byte: u8,
 
-    /// Whether this is a CGB-compatible cartridge
-    is_cgb: bool,
+    /// CGB compatibility byte
+    cgb_byte: u8,
 }
 
 impl Cartridge {
@@ -99,8 +99,12 @@ impl Cartridge {
         self.mbc.as_mut()
     }
 
+    pub fn cgb_byte(&self) -> u8 {
+        self.cgb_byte
+    }
+
     pub fn is_cgb(&self) -> bool {
-        self.is_cgb
+        self.cgb_byte & 0x80 != 0
     }
 
     pub fn new_from_rom_bytes(rom_bytes: Vec<u8>) -> Self {
@@ -117,19 +121,24 @@ impl Cartridge {
         assert_eq!(nintendo_logo, NINTENDO_LOGO);
 
         // Title is ended by a null byte (16 bytes long)
-        let title_bytes = scanner.read_bytes(16);
+        let title_bytes = scanner.read_bytes(11);
         let title = title_bytes
             .iter()
             .map(|b| *b as char)
             .take_while(|c| *c != '\0')
             .collect();
 
+        // Skip manufacturer code (4 bytes)
+        scanner.skip(4);
+
+        // CGB flag (1 byte)
+        let cgb_byte = scanner.read_u8();
+
         // Skip new licensee code (2 bytes)
         scanner.skip(2);
 
-        // Skip CGB flag (1 byte)
-        let cgb_byte = scanner.read_u8();
-        let is_cgb = (cgb_byte & 0x80) != 0;
+        // Skip SGB flag (1 byte)
+        scanner.skip(1);
 
         // Skip cartridge type (1 byte),
         let cartridge_type_byte = scanner.read_u8();
@@ -191,7 +200,7 @@ impl Cartridge {
             entry_point_code,
             title,
             cartridge_type_byte,
-            is_cgb,
+            cgb_byte,
         }
     }
 
@@ -228,7 +237,7 @@ impl fmt::Debug for Cartridge {
             self.entry_point_code,
             self.title,
             self.cartridge_type_byte,
-            self.is_cgb,
+            self.is_cgb(),
             self.rom.len(),
             self.ram.len()
         )

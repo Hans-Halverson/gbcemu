@@ -1,6 +1,8 @@
+use std::{fmt::Debug, mem};
+
 use serde::{Deserialize, Serialize};
 
-use crate::emulator::{Emulator, SCREEN_WIDTH};
+use crate::emulator::{CgbPaletteData, Emulator, SCREEN_WIDTH};
 
 /// A sprite in OAM.
 struct Object {
@@ -11,6 +13,14 @@ struct Object {
 }
 
 impl Object {
+    fn cgb_pallette_number(&self) -> usize {
+        (self.attributes & 0x07) as usize
+    }
+
+    fn vram_bank_number(&self) -> usize {
+        ((self.attributes & 0x08) >> 3) as usize
+    }
+
     /// Whether the palette is OBP0 or OBP1
     fn dmg_palette_number(&self) -> u8 {
         (self.attributes & 0x10) >> 4
@@ -24,10 +34,49 @@ impl Object {
         self.attributes & 0x40 != 0
     }
 
-    /// If false, object is drawn on top of background (and window) if not transparent.
-    /// If true, object is behind background (and window) unless background color is transparent.
+    /// Non-CGB mode:
+    ///
+    /// If false, object has priority to be drawn on top of background (and window) if not transparent.
+    /// If true, object does not have priority and is drawn behind background (and window) unless
+    /// background color is transparent.
+    ///
+    /// CGB mode:
+    ///
+    /// If true, object has priority to be drawn behind background.
+    /// - LCDC priority flag overrides this
+    /// - This is overridden by background tile's priority flag
     fn in_background(&self) -> bool {
         self.attributes & 0x80 != 0
+    }
+}
+
+/// Attributes for a background tile (CGB mode only).
+struct BackgroundTileAttributes {
+    raw: u8,
+}
+
+impl BackgroundTileAttributes {
+    fn color_palette(&self) -> usize {
+        (self.raw & 0x07) as usize
+    }
+
+    fn vram_bank_number(&self) -> usize {
+        ((self.raw & 0x08) >> 3) as usize
+    }
+
+    fn is_horizontally_flipped(&self) -> bool {
+        self.raw & 0x20 != 0
+    }
+
+    fn is_vertically_flipped(&self) -> bool {
+        self.raw & 0x40 != 0
+    }
+
+    /// If true, background/window has priority to be drawn on top of objects.
+    /// - LCDC priority flag overrides this
+    /// - This overrides the object's priority flag
+    fn in_foreground(&self) -> bool {
+        self.raw & 0x80 != 0
     }
 }
 
@@ -80,11 +129,17 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
 
     // In DMG mode, sort by x coordinate (lower x has higher priority). A stable sort is used so
     // that earlier objects in OAM have higher priority when x coordinates are equal.
-    if !emulator.in_cgb_mode() {
+    if emulator.opri() == 1 {
         objects.sort_by_key(|obj| obj.x);
     }
 
     objects
+}
+
+#[derive(Debug)]
+pub enum Color {
+    Dmg(DmgColor),
+    Cgb(CgbColor),
 }
 
 /// A 2-bit color
@@ -92,21 +147,71 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
 ///   1: Light gray
 ///   2: Dark gray
 ///   3: Black
-pub type Color = u8;
+pub type DmgColor = u8;
 
-const WHITE_COLOR: Color = 0;
+pub struct CgbColor {
+    raw: u16,
+}
+
+impl Debug for CgbColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CgbColor")
+            .field("red", &self.red())
+            .field("green", &self.green())
+            .field("blue", &self.blue())
+            .finish()
+    }
+}
+
+impl CgbColor {
+    pub fn new(raw: u16) -> Self {
+        Self { raw }
+    }
+
+    pub fn red(&self) -> u8 {
+        (self.raw & 0x1F) as u8
+    }
+
+    pub fn green(&self) -> u8 {
+        ((self.raw >> 5) & 0x1F) as u8
+    }
+
+    pub fn blue(&self) -> u8 {
+        ((self.raw >> 10) & 0x1F) as u8
+    }
+}
+
+const DMG_WHITE_COLOR: Color = Color::Dmg(0);
+
+enum ColorPalette {
+    Dmg(u8),
+    Cgb(u64),
+}
+
+const PALETTE_SIZE: usize = 4;
+
+/// Size of a single CGB color in bytes. CGB colors are stored as 15-bit RGB values.
+const CGB_COLOR_SIZE: usize = mem::size_of::<CgbColor>();
+
+/// Size of a single CGB palette in bytes.
+const CGB_PALETTE_SIZE: usize = CGB_COLOR_SIZE * PALETTE_SIZE;
 
 /// An index into a palette (0-3).
 type ColorIndex = u8;
 
 const TRANSPARENT_COLOR_INDEX: ColorIndex = 0;
 
-/// Returns the color index of the background or window pixel at (x, y) on the screen.
+/// Returns the color index of the background or window pixel at (x, y) on the screen. Also returns
+/// the background tile attributes in CGB mode.
 ///
-/// Returns None if background and window are disabled.
-fn background_or_window_color_index(emulator: &mut Emulator, x: u8, y: u8) -> Option<ColorIndex> {
-    if !emulator.is_lcdc_bg_window_enabled() {
-        return None;
+/// Returns None for color index if background and window are disabled in DMG mode.
+fn background_or_window_color_index(
+    emulator: &mut Emulator,
+    x: u8,
+    y: u8,
+) -> (Option<ColorIndex>, Option<BackgroundTileAttributes>) {
+    if !emulator.in_cgb_mode() && !emulator.is_lcdc_dmg_bg_window_enabled() {
+        return (None, None);
     }
 
     // Find the tile map coordinates in the window if pixel is in the window
@@ -118,25 +223,55 @@ fn background_or_window_color_index(emulator: &mut Emulator, x: u8, y: u8) -> Op
 
     // Otherwise find tile map coordinates in the background
     let is_window = window_coordinates.is_some();
-    let tile_map_coordinates =
+    let mut tile_map_coordinates =
         window_coordinates.unwrap_or_else(|| background_tile_map_coordinates(emulator, x, y));
 
     // Lookup the actual tile in the tile map
     let tile_index =
         lookup_tile_in_tile_map(emulator, !is_window, tile_map_coordinates.tile_map_index);
 
+    // In CGB mode tile attributes are stored in a second tile map
+    let attributes = if emulator.in_cgb_mode() {
+        Some(lookup_tile_attributes_in_tile_map(
+            emulator,
+            !is_window,
+            tile_map_coordinates.tile_map_index,
+        ))
+    } else {
+        None
+    };
+
+    // Adjust offsets within the file based on flip attributes
+    if let Some(attributes) = attributes.as_ref() {
+        if attributes.is_horizontally_flipped() {
+            tile_map_coordinates.x_offset = 7 - tile_map_coordinates.x_offset;
+        }
+
+        if attributes.is_vertically_flipped() {
+            tile_map_coordinates.y_offset = 7 - tile_map_coordinates.y_offset;
+        }
+    }
+
+    // In CGB mode tile attributes specify the VRAM bank
+    let vram_bank_num = if let Some(attributes) = attributes.as_ref() {
+        attributes.vram_bank_number()
+    } else {
+        0
+    };
+
     let tile_data_area_addressing_mode = emulator.lcdc_bg_window_tile_data_addressing_mode();
 
     // Lookup the color index at the offsets within this tile, stored in tile data area
     let color_index = lookup_color_index_in_tile(
         emulator,
+        vram_bank_num,
         tile_data_area_addressing_mode,
         tile_index,
         tile_map_coordinates.x_offset,
         tile_map_coordinates.y_offset,
     );
 
-    Some(color_index)
+    (Some(color_index), attributes)
 }
 
 /// An internal counter used for tracking the tilemap line number for the window. Only incremented
@@ -251,10 +386,17 @@ fn tile_map_coordinates(x: u8, y: u8) -> TileMapCoordinates {
 const TILE_MAP_1_ADDRESS: usize = 0x9800;
 const TILE_MAP_2_ADDRESS: usize = 0x9C00;
 
-/// Lookup a tile map index to get the corresponding tile index in the tile data area.
+/// Lookup a tile map index to the corresponding byte in the tile data area.
+///
+/// This byte may be interpreted as a tile index or tile attributes depending on context.
 ///
 /// Must specify whether looking up background or window tile map, as they can be different.
-fn lookup_tile_in_tile_map(emulator: &Emulator, is_background: bool, tile_map_index: usize) -> u8 {
+fn lookup_byte_in_tile_map(
+    emulator: &Emulator,
+    vram_bank_num: usize,
+    is_background: bool,
+    tile_map_index: usize,
+) -> u8 {
     let tile_map_number = if is_background {
         emulator.lcdc_bg_tile_map_number()
     } else {
@@ -267,7 +409,28 @@ fn lookup_tile_in_tile_map(emulator: &Emulator, is_background: bool, tile_map_in
         TILE_MAP_2_ADDRESS
     };
 
-    emulator.read_address((tile_map_base + tile_map_index) as u16)
+    // Tile index is always in VRAM bank 0
+    let vram_addr =
+        Emulator::map_vram_address_in_bank((tile_map_base + tile_map_index) as u16, vram_bank_num);
+
+    emulator.vram()[vram_addr]
+}
+
+/// Lookup a tile map index to get the corresponding tile index in the tile data area.
+fn lookup_tile_in_tile_map(emulator: &Emulator, is_background: bool, tile_map_index: usize) -> u8 {
+    // Tile index are always in VRAM bank 0
+    lookup_byte_in_tile_map(emulator, 0, is_background, tile_map_index)
+}
+
+/// Lookup a tile map index to get the corresponding tile attributes (in CGB mode).
+fn lookup_tile_attributes_in_tile_map(
+    emulator: &Emulator,
+    is_background: bool,
+    tile_map_index: usize,
+) -> BackgroundTileAttributes {
+    // Tile attributes are always in VRAM bank 1
+    let raw = lookup_byte_in_tile_map(emulator, 1, is_background, tile_map_index);
+    BackgroundTileAttributes { raw }
 }
 
 const TILE_DATA_1_BASE_ADDRESS: usize = 0x8000;
@@ -283,6 +446,7 @@ const TILE_DATA_SIZE: usize = 16;
 /// Use the tile data area provided (0 or 1).
 fn lookup_color_index_in_tile(
     emulator: &Emulator,
+    vram_bank_num: usize,
     tile_data_area_addressing_mode: u8,
     tile_index: u8,
     x_offset: u8,
@@ -300,24 +464,62 @@ fn lookup_color_index_in_tile(
     // Each line in the tile is represented by 2 bytes
     let line_data_start = tile_data_start + (y_offset as usize * 2);
 
+    // Calculate the physical VRAM address
+    let vram_addr = Emulator::map_vram_address_in_bank(line_data_start as u16, vram_bank_num);
+
     let mask = 1 << (7 - x_offset);
 
-    let low_bit = emulator.read_address(line_data_start as u16) & mask != 0;
-    let high_bit = emulator.read_address((line_data_start + 1) as u16) & mask != 0;
+    let low_bit = emulator.vram()[vram_addr] & mask != 0;
+    let high_bit = emulator.vram()[vram_addr + 1] & mask != 0;
 
     ((high_bit as u8) << 1) | (low_bit as u8)
 }
 
 /// Lookup the 2-bit color for the given color index in a palette.
-fn lookup_color_in_palette(palette: u8, color_index: ColorIndex) -> Color {
-    palette >> (color_index * 2) & 0x03
+fn lookup_color_in_palette(palette: &ColorPalette, color_index: ColorIndex) -> Color {
+    match palette {
+        ColorPalette::Dmg(palette) => {
+            // DMG color is a 2-bit value
+            Color::Dmg(palette >> (color_index * 2) & 0x03)
+        }
+        ColorPalette::Cgb(palette) => Color::Cgb(CgbColor::new(
+            (palette >> (color_index * 16)) as u16 & 0x7FFF,
+        )),
+    }
 }
 
-fn object_color_palette(emulator: &Emulator, object: &Object) -> u8 {
+fn lookup_cgb_palette(cgb_palletes: &CgbPaletteData, palette_number: usize) -> ColorPalette {
+    let start = palette_number * CGB_PALETTE_SIZE;
+    let palette_slice = &cgb_palletes[start..(start + CGB_PALETTE_SIZE)];
+
+    ColorPalette::Cgb(u64::from_le_bytes(palette_slice.try_into().unwrap()))
+}
+
+fn background_color_palette(
+    emulator: &Emulator,
+    attributes: Option<&BackgroundTileAttributes>,
+) -> ColorPalette {
+    // TODO: Handle CGB's DMG compatibility mode
+    if emulator.in_cgb_mode() {
+        return lookup_cgb_palette(
+            emulator.cgb_background_palettes(),
+            attributes.unwrap().color_palette(),
+        );
+    }
+
+    ColorPalette::Dmg(emulator.bgp())
+}
+
+fn object_color_palette(emulator: &Emulator, object: &Object) -> ColorPalette {
+    // TODO: Handle CGB's DMG compatibility mode
+    if emulator.in_cgb_mode() {
+        return lookup_cgb_palette(emulator.cgb_object_palettes(), object.cgb_pallette_number());
+    }
+
     if object.dmg_palette_number() == 0 {
-        emulator.obp0()
+        ColorPalette::Dmg(emulator.obp0())
     } else {
-        emulator.obp1()
+        ColorPalette::Dmg(emulator.obp1())
     }
 }
 
@@ -329,9 +531,11 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
     let object_height = object_height(are_objects_double_size);
 
     for x in 0..(SCREEN_WIDTH as u8) {
-        let background_color_index = background_or_window_color_index(emulator, x, scanline);
+        let (background_color_index, background_attributes) =
+            background_or_window_color_index(emulator, x, scanline);
+        let background_palette = background_color_palette(emulator, background_attributes.as_ref());
 
-        let mut final_color_index_and_palette = (background_color_index, emulator.bgp());
+        let mut final_color_index_and_palette = (background_color_index, background_palette);
 
         if emulator.is_lcdc_obj_enabled() {
             for object in &objects {
@@ -369,9 +573,17 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
                     object.tile_index
                 };
 
+                // In CGB mode object attributes specify the VRAM bank
+                let vram_bank_num = if emulator.in_cgb_mode() {
+                    object.vram_bank_number()
+                } else {
+                    0
+                };
+
                 // Find the color index for the pixel at those offsets in the tile
                 let object_color_index = lookup_color_index_in_tile(
                     emulator,
+                    vram_bank_num,
                     OBJECT_TILE_DATA_ADDRESSING_MODE,
                     tile_index,
                     x_offset,
@@ -383,10 +595,23 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
                     continue;
                 }
 
-                // Object is not transparent so it will always be rendered unless flagged to be in
-                // the background and the background is non-transparent.
-                let is_object_on_top = !object.in_background()
-                    || matches!(background_color_index, None | Some(TRANSPARENT_COLOR_INDEX));
+                // Background attributes are only present in CGB mode
+                let is_object_on_top = if let Some(background_attributes) =
+                    background_attributes.as_ref()
+                {
+                    // Object is drawn on top of transparent background
+                    matches!(background_color_index, Some(TRANSPARENT_COLOR_INDEX)) ||
+                    // Object is drawn on top if lcdc priority flag forces bg/window behind objects
+                    !emulator.is_lcdc_cgb_bg_window_priority() ||
+                    // Object in background and bg/window in foreground flags are considered, with
+                    // bg/window flag overriding when necessary.
+                    (!object.in_background() && !background_attributes.in_foreground())
+                } else {
+                    // Object is not transparent so it will always be rendered unless flagged to be
+                    // in the background and the background is non-transparent.
+                    !object.in_background()
+                        || matches!(background_color_index, None | Some(TRANSPARENT_COLOR_INDEX))
+                };
 
                 if is_object_on_top {
                     let object_palette = object_color_palette(emulator, object);
@@ -403,10 +628,10 @@ pub fn draw_scanline(emulator: &mut Emulator, scanline: u8) {
         let (color_index, palette) = final_color_index_and_palette;
 
         let color = if let Some(color_index) = color_index {
-            lookup_color_in_palette(palette, color_index)
+            lookup_color_in_palette(&palette, color_index)
         } else {
-            // No color so pixel defaults to white
-            WHITE_COLOR
+            // No color so pixel defaults to white. This can only occur in DMG mode.
+            DMG_WHITE_COLOR
         };
 
         emulator.write_color(x, scanline, color);

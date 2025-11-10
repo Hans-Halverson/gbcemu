@@ -22,7 +22,6 @@ use crate::{
         TOTAL_WORK_RAM_SIZE, UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
     },
     cartridge::Cartridge,
-    initialization::IE_INIT,
     io_registers::IoRegisters,
     machine::Machine,
     mbc::mbc::Location,
@@ -164,7 +163,7 @@ const NS_PER_FRAME: f64 = 1_000_000_000.0f64 / REFRESH_RATE;
 /// Nanoseconds in real time per frame in turbo mode
 const NS_PER_MICROFRAME: f64 = NS_PER_FRAME / (TURBO_MULTIPLIER as f64);
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
     /// Mode 0: Move to the next scanline
     HBlank,
@@ -259,6 +258,14 @@ const TAC_MASK_64_TICKS: u16 = 0x0020;
 const TAC_MASK_256_TICKS: u16 = 0x0080;
 const TAC_MASK_1024_TICKS: u16 = 0x0200;
 
+const IE_INIT: Register = 0x00;
+
+/// Value returned when reading from VRAM (or CGB palettes) during draw mode
+pub const VRAM_READ_FAILED_VALUE: u8 = 0xFF;
+
+pub type CgbPaletteData = [u8; 64];
+type StoredCgbPalette = serde_big_array::Array<u8, 64>;
+
 #[derive(Serialize, Deserialize)]
 pub struct Emulator {
     /// Cartridge inserted
@@ -329,6 +336,12 @@ pub struct Emulator {
     /// Interrupt Enable register (0xFFFF) (IE)
     ie: Register,
 
+    /// Background color palettes (CGB only)
+    cgb_background_palettes: Box<StoredCgbPalette>,
+
+    /// Object color palettes (CGB only)
+    cgb_object_palettes: Box<StoredCgbPalette>,
+
     /// Number of ticks remaining until the next instruction is executed
     ticks_to_next_instruction: usize,
 
@@ -360,6 +373,9 @@ pub struct Emulator {
     /// Whether the emulator is currently in turbo mode
     #[serde(skip)]
     in_turbo_mode: bool,
+
+    /// Whether the emulator is currently booting (running the boot ROM)
+    is_booting: bool,
 }
 
 pub struct EmulatorBuilder {
@@ -425,8 +441,6 @@ impl Emulator {
     /// Initialized to the standard state after the BIOS has run and the cartridge entry point code
     /// is ready to execute.
     fn initial_state(cartridge: Cartridge, machine: Machine) -> Self {
-        let is_cgb = cartridge.is_cgb();
-
         Emulator {
             cartridge,
             options: Arc::new(Options::default()),
@@ -439,11 +453,15 @@ impl Emulator {
             microframe: 0,
             scanline: 0,
             mode: Mode::OamScan,
-            in_cgb_mode: is_cgb,
+            in_cgb_mode: false,
             vram: vec![0; machine.vram_size()],
             oam: vec![0; OAM_SIZE],
             hram: vec![0; HRAM_SIZE],
             work_ram: vec![0; TOTAL_WORK_RAM_SIZE],
+            // CGB background palettes initialized to all white
+            cgb_background_palettes: Box::new(serde_big_array::Array([0xFF; 64])),
+            // CGB object palettes only requires that first byte is 0x00, rest are uninitialized
+            cgb_object_palettes: Box::new(serde_big_array::Array([0x00; 64])),
             regs: Registers::init_for_machine(machine),
             io_regs: IoRegisters::init_for_machine(machine),
             ie: IE_INIT,
@@ -457,6 +475,7 @@ impl Emulator {
             tac_mask: TAC_MASK_1024_TICKS,
             is_timer_enabled: false,
             in_turbo_mode: false,
+            is_booting: true,
         }
     }
 
@@ -476,8 +495,20 @@ impl Emulator {
         self.in_cgb_mode
     }
 
+    pub fn set_in_cgb_mode(&mut self, in_cgb_mode: bool) {
+        self.in_cgb_mode = in_cgb_mode;
+    }
+
+    pub fn is_cgb_machine(&self) -> bool {
+        matches!(self.machine, Machine::Cgb)
+    }
+
     pub fn in_test_mode(&self) -> bool {
         self.options.in_test_mode
+    }
+
+    pub fn vram(&self) -> &[u8] {
+        &self.vram
     }
 
     pub fn oam(&self) -> &[u8] {
@@ -498,6 +529,22 @@ impl Emulator {
 
     pub fn io_regs_mut(&mut self) -> &mut IoRegisters {
         &mut self.io_regs
+    }
+
+    pub fn cgb_background_palettes(&self) -> &CgbPaletteData {
+        &self.cgb_background_palettes
+    }
+
+    pub fn cgb_background_palettes_mut(&mut self) -> &mut CgbPaletteData {
+        &mut self.cgb_background_palettes
+    }
+
+    pub fn cgb_object_palettes(&self) -> &CgbPaletteData {
+        &self.cgb_object_palettes
+    }
+
+    pub fn cgb_object_palettes_mut(&mut self) -> &mut CgbPaletteData {
+        &mut self.cgb_object_palettes
     }
 
     pub fn halt_cpu(&mut self) {
@@ -528,6 +575,18 @@ impl Emulator {
         self.is_timer_enabled = enabled;
     }
 
+    pub fn is_booting(&self) -> bool {
+        self.is_booting
+    }
+
+    pub fn set_is_booting(&mut self, is_booting: bool) {
+        self.is_booting = is_booting;
+    }
+
+    pub fn tick_number(&self) -> u32 {
+        self.tick
+    }
+
     /// Map from the divider register mask to the corresponding bits of the TAC register
     pub fn tac_bits(&self) -> u8 {
         match self.tac_mask {
@@ -550,6 +609,11 @@ impl Emulator {
         };
 
         self.tac_mask = tac_mask;
+    }
+
+    /// Whether we can currently access VRAM and the CGB palette data
+    pub fn can_access_vram(&self) -> bool {
+        self.mode != Mode::Draw || !self.is_lcdc_lcd_enabled()
     }
 
     pub fn clone_output_buffer(&self) -> Option<SharedOutputBuffer> {
@@ -587,6 +651,8 @@ impl Emulator {
 
     /// Run the emulator at the GameBoy's native framerate
     pub fn run(&mut self) {
+        self.emulate_boot_sequence();
+
         let start_time = Instant::now();
         let mut last_save_file_flush_time = Instant::now();
 
@@ -939,13 +1005,32 @@ impl Emulator {
         }
     }
 
+    fn map_5_bit_color_to_8_bit(color: u8) -> u8 {
+        // Copy upper 3 bits to lower bits to most regularly distribute the color range
+        (color << 3) | (color >> 2)
+    }
+
     pub fn write_color(&self, x: u8, y: u8, color: Color) {
         if let Some(output_buffer) = &self.output_buffer {
-            output_buffer.write_pixel(
-                x as usize,
-                y as usize,
-                SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
-            );
+            let color32 = match color {
+                // Look up 2-bit color in screen palette
+                Color::Dmg(color) => SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
+                // Convert from 5-bit RGB to 8-bit RGB by shifting
+                Color::Cgb(color) => {
+                    let red = color.red() as u8;
+                    let green = color.green() as u8;
+                    let blue = color.blue() as u8;
+
+                    // Copy upper 3 bits to lower bits to most regularly distribute the color range
+                    Color32::from_rgb(
+                        Self::map_5_bit_color_to_8_bit(red),
+                        Self::map_5_bit_color_to_8_bit(green),
+                        Self::map_5_bit_color_to_8_bit(blue),
+                    )
+                }
+            };
+
+            output_buffer.write_pixel(x as usize, y as usize, color32);
         }
     }
 
@@ -1034,14 +1119,22 @@ impl Emulator {
         }
     }
 
+    /// Map from a virtual address in VRAM to a physical address in the VRAM array for the given
+    /// bank.
+    pub fn map_vram_address_in_bank(addr: Address, bank_num: usize) -> usize {
+        (addr - VRAM_START) as usize + bank_num * SINGLE_VRAM_BANK_SIZE
+    }
+
+    /// Map from a virtual address in VRAM to a physical address in the VRAM array for the currently
+    /// selected bank in VBK.
     fn physical_vram_bank_address(&self, addr: Address) -> usize {
-        let bank_num = if self.in_cgb_mode {
+        let bank_num = if self.in_cgb_mode() {
             (self.vbk() & 0x01) as usize
         } else {
             0
         };
 
-        (addr - VRAM_START) as usize + bank_num * SINGLE_VRAM_BANK_SIZE
+        Self::map_vram_address_in_bank(addr, bank_num)
     }
 
     fn physical_first_work_ram_bank_address(&self, addr: Address) -> usize {
@@ -1049,7 +1142,7 @@ impl Emulator {
     }
 
     fn second_wram_bank_num(&self) -> usize {
-        if self.in_cgb_mode {
+        if self.in_cgb_mode() {
             // Cannot access bank 0, instead return bank 1
             (self.wbk() & 0x7).max(1) as usize
         } else {
@@ -1192,6 +1285,24 @@ impl Emulator {
                 self.write_tima(new_tima);
             }
         }
+    }
+
+    /// Most initialization is emulated statically by setting the initial state. Perform any dynamic
+    /// initialization here.
+    fn emulate_boot_sequence(&mut self) {
+        if self.is_cgb_machine() {
+            if self.cartridge().is_cgb() {
+                self.write_key0(self.cartridge().cgb_byte());
+            } else {
+                self.write_key0(0x04);
+                self.write_opri(0x01);
+
+                // TODO: Write compatibility palette
+            }
+        }
+
+        // Unmap the boot ROM by writing A to the bank register
+        self.write_bank(self.regs().a());
     }
 }
 

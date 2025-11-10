@@ -1,4 +1,4 @@
-use std::fs;
+use std::{array, fs};
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
@@ -31,7 +31,7 @@ impl SaveFile {
 
         SaveFile {
             cartridge: cartridge_bytes,
-            quick_saves: std::array::from_fn(|_| None),
+            quick_saves: array::from_fn(|_| None),
         }
     }
 
