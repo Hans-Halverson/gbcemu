@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::address_space::SINGLE_VRAM_BANK_SIZE;
+use crate::address_space::{SINGLE_VRAM_BANK_SIZE, SINGLE_WORK_RAM_BANK_SIZE};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub enum Machine {
@@ -15,6 +15,13 @@ impl Machine {
         match self {
             Machine::Dmg => 1 * SINGLE_VRAM_BANK_SIZE,
             Machine::Cgb => 2 * SINGLE_VRAM_BANK_SIZE,
+        }
+    }
+
+    pub const fn wram_size(&self) -> usize {
+        match self {
+            Machine::Dmg => 2 * SINGLE_WORK_RAM_BANK_SIZE,
+            Machine::Cgb => 8 * SINGLE_WORK_RAM_BANK_SIZE,
         }
     }
 }

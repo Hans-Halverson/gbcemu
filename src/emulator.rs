@@ -19,7 +19,7 @@ use crate::{
         FIRST_WORK_RAM_BANK_START, HRAM_END, HRAM_SIZE, HRAM_START, IE_ADDRESS, IO_REGISTERS_END,
         OAM_END, OAM_SIZE, OAM_START, ROM_END, SECOND_WORK_RAM_BANK_END,
         SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE, SINGLE_WORK_RAM_BANK_SIZE,
-        TOTAL_WORK_RAM_SIZE, UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
+        UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
     },
     cartridge::Cartridge,
     io_registers::IoRegisters,
@@ -457,7 +457,7 @@ impl Emulator {
             vram: vec![0; machine.vram_size()],
             oam: vec![0; OAM_SIZE],
             hram: vec![0; HRAM_SIZE],
-            work_ram: vec![0; TOTAL_WORK_RAM_SIZE],
+            work_ram: vec![0; machine.wram_size()],
             // CGB background palettes initialized to all white
             cgb_background_palettes: Box::new(serde_big_array::Array([0xFF; 64])),
             // CGB object palettes only requires that first byte is 0x00, rest are uninitialized

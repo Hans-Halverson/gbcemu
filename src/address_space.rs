@@ -29,7 +29,6 @@ pub const SECOND_WORK_RAM_BANK_END: Address = 0xE000;
 
 pub const SINGLE_WORK_RAM_BANK_SIZE: usize =
     (FIRST_WORK_RAM_BANK_END - FIRST_WORK_RAM_BANK_START) as usize;
-pub const TOTAL_WORK_RAM_SIZE: usize = SINGLE_WORK_RAM_BANK_SIZE * 2;
 
 // Echo RAM 0xE000-0xFE00
 pub const ECHO_RAM_END: Address = 0xFE00;
