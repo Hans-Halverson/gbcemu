@@ -154,6 +154,12 @@ const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
 /// Total number of ticks to complete an OAM DMA transfer
 const OAM_DMA_TRANSFER_TICKS: usize = 640;
 
+/// Size of a single block transferred in a VRAM DMA transfer
+const VRAM_DMA_TRANSFER_BLOCK_SIZE: u16 = 16;
+
+/// Number of ticks to transfer a single 16-byte block in a VRAM DMA transfer
+const VRAM_DMA_TRANSFER_TICKS_PER_BLOCK: usize = 32;
+
 /// How much faster the emulator tries to run in turbo mode
 const TURBO_MULTIPLIER: u64 = 10;
 
@@ -251,6 +257,24 @@ struct OamDmaTransfer {
     source_address: Address,
     /// The number of ticks until this transfer is complete
     ticks_remaining: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum VramDmaTransferKind {
+    /// Program execution is halted until DMA transfer completes
+    GeneralPurpose,
+    /// Transfer occurs during HBlank periods
+    HBlank,
+}
+
+/// An HBlank DMA transfer in progress
+#[derive(Serialize, Deserialize)]
+pub struct VramDmaTransfer {
+    source: Address,
+    dest: Address,
+    remaining_ticks_in_current_hblank: Option<usize>,
+    num_blocks_left: u8,
+    total_num_blocks: u8,
 }
 
 const TAC_MASK_16_TICKS: u16 = 0x0008;
@@ -351,8 +375,17 @@ pub struct Emulator {
     /// The current OAM DMA transfer, if one is in progress
     current_oam_dma_transfer: Option<OamDmaTransfer>,
 
+    /// The current HBlank VRAM DMA transfer, if one is in progress
+    current_hblank_vram_dma_transfer: Option<VramDmaTransfer>,
+
+    /// The number of ticks remaining in a general purpose VRAM DMA transfer, if one is in progress
+    current_general_purpose_vram_dma_transfer: Option<usize>,
+
     /// Whether the CPU is currently halted
     is_cpu_halted: bool,
+
+    /// Whether the CPU is currently stopped due to a VRAM DMA transfer
+    is_cpu_stopped_for_vram_dma: bool,
 
     /// Internal line number counter used for rendering the window
     window_line_counter: WindowLineCounter,
@@ -468,7 +501,10 @@ impl Emulator {
             ticks_to_next_instruction: 0,
             pending_enable_interrupts: PendingEnableInterrupt::None,
             current_oam_dma_transfer: None,
+            current_hblank_vram_dma_transfer: None,
+            current_general_purpose_vram_dma_transfer: None,
             is_cpu_halted: false,
+            is_cpu_stopped_for_vram_dma: false,
             window_line_counter: WindowLineCounter::new(),
             pressed_buttons: 0,
             full_divider_register: 0,
@@ -766,7 +802,7 @@ impl Emulator {
             }
 
             // Finally enter HBlank for the rest of the scanline
-            self.set_mode(Mode::HBlank);
+            self.enter_hblank();
             for _ in 0..HBLANK_TICKS {
                 self.run_tick();
             }
@@ -786,6 +822,14 @@ impl Emulator {
     fn enter_vblank(&mut self) {
         self.set_mode(Mode::VBlank);
         self.window_line_counter.reset();
+    }
+
+    fn enter_hblank(&mut self) {
+        self.set_mode(Mode::HBlank);
+
+        if self.current_hblank_vram_dma_transfer.is_some() {
+            self.start_hblank_vram_dma_transfer_block();
+        }
     }
 
     fn set_mode(&mut self, mode: Mode) {
@@ -832,7 +876,7 @@ impl Emulator {
                 let interrupt_bits = self.interrupt_bits();
                 if interrupt_bits != 0 {
                     // A pending interrupts resumes a halted CPU, even if IME is disabled and
-                    // interrup won't actually be handled.
+                    // interrupt won't actually be handled.
                     self.is_cpu_halted = false;
 
                     if self.regs().interrupts_enabled() {
@@ -841,7 +885,7 @@ impl Emulator {
                     }
                 }
 
-                if !self.is_cpu_halted {
+                if !self.is_cpu_halted && !self.is_cpu_stopped_for_vram_dma {
                     self.execute_instruction();
                     break 'handled;
                 }
@@ -854,6 +898,8 @@ impl Emulator {
         // Advance states at the end of the tick
         self.advance_pending_enable_interrupts_state();
         self.advance_oam_dma_transfer_state();
+        self.advance_general_purpose_vram_dma_transfer_state();
+        self.advance_hblank_vram_dma_transfer_state();
     }
 
     fn handle_inputs(&mut self) {
@@ -1237,11 +1283,6 @@ impl Emulator {
             source_address,
             ticks_remaining: OAM_DMA_TRANSFER_TICKS,
         });
-
-        for i in 0..OAM_SIZE {
-            let byte = self.read_address(source_address.wrapping_add(i as u16));
-            self.oam[i] = byte;
-        }
     }
 
     /// Complete an OAM DMA transfer, actually writing all data to OAM.
@@ -1264,6 +1305,128 @@ impl Emulator {
             if transfer.ticks_remaining == 0 {
                 self.complete_oam_dma_transfer();
             }
+        }
+    }
+
+    pub fn start_general_purpose_vram_dma_transfer(
+        &mut self,
+        source_address: Address,
+        dest_address: Address,
+        num_blocks: u8,
+    ) {
+        // General purpose transfers stop the CPU until complete
+        let num_ticks = (num_blocks as u16) * VRAM_DMA_TRANSFER_TICKS_PER_BLOCK as u16;
+        self.current_general_purpose_vram_dma_transfer = Some(num_ticks as usize);
+        self.is_cpu_stopped_for_vram_dma = true;
+
+        // This means it is not observable so we can perform the entire transfer at once.
+        for i in 0..((num_blocks as u16) * VRAM_DMA_TRANSFER_BLOCK_SIZE) {
+            let byte = self.read_address(source_address.wrapping_add(i as u16));
+            self.write_address(dest_address.wrapping_add(i as u16), byte);
+        }
+    }
+
+    fn advance_general_purpose_vram_dma_transfer_state(&mut self) {
+        if let Some(num_ticks_remaining) = self.current_general_purpose_vram_dma_transfer.as_mut() {
+            let num_ticks_remaining = *num_ticks_remaining;
+
+            // Transfer is complete. CPU is resumed and HDMA5 is set to 0xFF.
+            if num_ticks_remaining == 0 {
+                self.is_cpu_stopped_for_vram_dma = false;
+                self.current_general_purpose_vram_dma_transfer = None;
+                self.write_hdma5_raw(0xFF);
+                return;
+            }
+
+            self.current_general_purpose_vram_dma_transfer = Some(num_ticks_remaining - 1);
+        }
+    }
+
+    pub fn has_active_hblank_vram_dam_transfer(&self) -> bool {
+        self.current_hblank_vram_dma_transfer.is_some()
+    }
+
+    pub fn terminate_hblank_vram_dma_transfer(&mut self) {
+        self.current_hblank_vram_dma_transfer = None;
+
+        // Toggle the top bit of HDMA5 to indicate transfer has stopped while keeping the length
+        // part of the register unchanged.
+        self.write_hdma5_raw(self.hdma5() | 0x80);
+    }
+
+    pub fn start_hblank_vram_dma_transfer(
+        &mut self,
+        source: Address,
+        dest: Address,
+        num_blocks: u8,
+    ) {
+        self.current_hblank_vram_dma_transfer = Some(VramDmaTransfer {
+            source,
+            dest,
+            remaining_ticks_in_current_hblank: None,
+            num_blocks_left: num_blocks,
+            total_num_blocks: num_blocks,
+        });
+    }
+
+    fn start_hblank_vram_dma_transfer_block(&mut self) {
+        // HBlank VRAM DMA transfers are paused if the CPU is halted
+        if self.is_cpu_halted {
+            return;
+        }
+
+        let transfer = self.current_hblank_vram_dma_transfer.as_mut().unwrap();
+
+        let block_offset = (transfer.total_num_blocks - transfer.num_blocks_left) as u16
+            * VRAM_DMA_TRANSFER_BLOCK_SIZE;
+        let source_block_start = transfer.source + block_offset;
+        let dest_block_start = transfer.dest + block_offset;
+
+        // Perform a single block transfer
+        for i in 0..VRAM_DMA_TRANSFER_BLOCK_SIZE {
+            let byte = self.read_address(source_block_start + i);
+            self.write_address(dest_block_start + i, byte);
+        }
+
+        // Update state to reflect completed block
+        let transfer = self.current_hblank_vram_dma_transfer.as_mut().unwrap();
+        transfer.num_blocks_left -= 1;
+
+        // Stop the CPU while the transfer is in progress
+        transfer.remaining_ticks_in_current_hblank = Some(VRAM_DMA_TRANSFER_TICKS_PER_BLOCK);
+        self.is_cpu_stopped_for_vram_dma = true;
+    }
+
+    pub fn advance_hblank_vram_dma_transfer_state(&mut self) {
+        if self.current_hblank_vram_dma_transfer.is_none() {
+            return;
+        }
+
+        // HBlank VRAM DMA transfers are paused if the CPU is halted
+        if self.is_cpu_halted {
+            return;
+        }
+
+        let transfer = self.current_hblank_vram_dma_transfer.as_mut().unwrap();
+
+        if transfer.remaining_ticks_in_current_hblank == Some(0) {
+            transfer.remaining_ticks_in_current_hblank = None;
+
+            // This block is complete so resume the CPU
+            self.is_cpu_stopped_for_vram_dma = false;
+
+            // Encode the number of blocks left in HDMA5
+            let num_blocks_left = transfer.num_blocks_left;
+            self.write_hdma5_raw(num_blocks_left & 0x7F);
+
+            // Transfer is complete
+            if num_blocks_left == 0 {
+                self.current_hblank_vram_dma_transfer = None;
+                self.write_hdma5_raw(0xFF);
+                return;
+            }
+        } else if let Some(remaining_ticks) = transfer.remaining_ticks_in_current_hblank.as_mut() {
+            *remaining_ticks -= 1;
         }
     }
 

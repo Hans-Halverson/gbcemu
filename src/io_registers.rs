@@ -243,28 +243,28 @@ impl Emulator {
         self.set_is_booting(false);
     }
 
-    fn write_hdma1_impl(&mut self, _: Address, _: Register) {
-        unimplemented!("write to HDMA1 register")
-    }
+    fn write_hdma5_impl(&mut self, _: Address, value: Register) {
+        self.write_hdma5_raw(value);
 
-    fn write_hdma2_impl(&mut self, _: Address, _: Register) {
-        unimplemented!("write to HDMA2 register")
-    }
+        let is_high_bit_set = is_bit_set(value, 7);
 
-    fn write_hdma3_impl(&mut self, _: Address, _: Register) {
-        unimplemented!("write to HDMA3 register")
-    }
+        // The number of 16 byte chunks to transfer
+        let num_blocks = (value & 0x7F) as u8 + 1;
 
-    fn write_hdma4_impl(&mut self, _: Address, _: Register) {
-        unimplemented!("write to HDMA4 register")
-    }
+        // Writing a bit of 0 during an active DMA transfer terminates it
+        if !is_high_bit_set && self.has_active_hblank_vram_dam_transfer() {
+            self.terminate_hblank_vram_dma_transfer();
+            return;
+        }
 
-    fn read_hdma5_impl(&self, _: Address) -> Register {
-        unimplemented!("read from HDMA5 register")
-    }
+        let source = (((self.hdma1_raw() as u16) << 8) | self.hdma2_raw() as u16) & 0xFFF0;
+        let dest = ((((self.hdma3_raw() as u16) << 8) | self.hdma4_raw() as u16) & 0x1FF0) | 0x8000;
 
-    fn write_hdma5_impl(&mut self, _: Address, _: Register) {
-        unimplemented!("write to HDMA5 register")
+        if is_high_bit_set {
+            self.start_hblank_vram_dma_transfer(source, dest, num_blocks);
+        } else {
+            self.start_general_purpose_vram_dma_transfer(source, dest, num_blocks);
+        }
     }
 
     fn cgb_pallette_address(reg: Register) -> usize {
@@ -568,7 +568,7 @@ define_registers!(
         NONE,
         0xFF,
         read_from_write_only_register,
-        write_hdma1_impl
+        write_register_raw
     ),
     (
         hdma2,
@@ -576,7 +576,7 @@ define_registers!(
         NONE,
         0xFF,
         read_from_write_only_register,
-        write_hdma2_impl
+        write_register_raw
     ),
     (
         hdma3,
@@ -584,7 +584,7 @@ define_registers!(
         NONE,
         0xFF,
         read_from_write_only_register,
-        write_hdma3_impl
+        write_register_raw
     ),
     (
         hdma4,
@@ -592,9 +592,16 @@ define_registers!(
         NONE,
         0xFF,
         read_from_write_only_register,
-        write_hdma4_impl
+        write_register_raw
     ),
-    (hdma5, 0xFF55, NONE, 0xFF, read_hdma5_impl, write_hdma5_impl),
+    (
+        hdma5,
+        0xFF55,
+        NONE,
+        0xFF,
+        read_register_raw,
+        write_hdma5_impl
+    ),
     (
         bcps,
         0xFF68,
