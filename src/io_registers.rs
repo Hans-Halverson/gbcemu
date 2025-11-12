@@ -230,8 +230,19 @@ impl Emulator {
         }
     }
 
-    fn write_key1_impl(&mut self, _: Address, _: Register) {
-        unimplemented!("write to KEY1 register")
+    fn read_key1_impl(&self, _: Address) -> Register {
+        let raw = self.key1_raw();
+
+        if self.is_double_speed() {
+            raw | 0x80
+        } else {
+            raw
+        }
+    }
+
+    fn write_key1_impl(&mut self, _: Address, value: Register) {
+        // Only write the low bit to arm a speed switch
+        self.write_key1_raw(value & 0x01);
     }
 
     fn write_vbk_impl(&mut self, _: Address, value: Register) {
@@ -557,7 +568,7 @@ define_registers!(
         0xFF4D,
         NONE,
         VARIABLE,
-        read_register_raw,
+        read_key1_impl,
         write_key1_impl
     ),
     (vbk, 0xFF4F, NONE, 0xFE, read_register_raw, write_vbk_impl),

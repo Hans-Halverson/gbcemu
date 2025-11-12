@@ -160,6 +160,9 @@ const VRAM_DMA_TRANSFER_BLOCK_SIZE: u16 = 16;
 /// Number of ticks to transfer a single 16-byte block in a VRAM DMA transfer
 const VRAM_DMA_TRANSFER_TICKS_PER_BLOCK: usize = 32;
 
+/// Number of ticks to halt after executing a speed switch
+const SPEED_SWITCH_TICKS: usize = 0x20000;
+
 /// How much faster the emulator tries to run in turbo mode
 const TURBO_MULTIPLIER: u64 = 10;
 
@@ -381,6 +384,9 @@ pub struct Emulator {
     /// The number of ticks remaining in a general purpose VRAM DMA transfer, if one is in progress
     current_general_purpose_vram_dma_transfer: Option<usize>,
 
+    /// The number of ticks remaining in the current CPU halt after a speed switch was executed
+    current_speed_switch: Option<usize>,
+
     /// Whether the CPU is currently halted
     is_cpu_halted: bool,
 
@@ -409,6 +415,9 @@ pub struct Emulator {
 
     /// Whether the emulator is currently booting (running the boot ROM)
     is_booting: bool,
+
+    /// Whether the emulator is currently in double speed mode
+    is_double_speed: bool,
 }
 
 pub struct EmulatorBuilder {
@@ -503,6 +512,7 @@ impl Emulator {
             current_oam_dma_transfer: None,
             current_hblank_vram_dma_transfer: None,
             current_general_purpose_vram_dma_transfer: None,
+            current_speed_switch: None,
             is_cpu_halted: false,
             is_cpu_stopped_for_vram_dma: false,
             window_line_counter: WindowLineCounter::new(),
@@ -512,6 +522,7 @@ impl Emulator {
             is_timer_enabled: false,
             in_turbo_mode: false,
             is_booting: true,
+            is_double_speed: false,
         }
     }
 
@@ -587,6 +598,13 @@ impl Emulator {
         self.is_cpu_halted = true;
     }
 
+    pub fn resume_halted_cpu(&mut self) {
+        self.is_cpu_halted = false;
+
+        // Reset the speed switch countdown until the current halt is cleared
+        self.current_speed_switch = None;
+    }
+
     pub fn window_line_counter_mut(&mut self) -> &mut WindowLineCounter {
         &mut self.window_line_counter
     }
@@ -617,6 +635,14 @@ impl Emulator {
 
     pub fn set_is_booting(&mut self, is_booting: bool) {
         self.is_booting = is_booting;
+    }
+
+    pub fn is_double_speed(&self) -> bool {
+        self.is_double_speed
+    }
+
+    pub fn set_is_double_speed(&mut self, is_double_speed: bool) {
+        self.is_double_speed = is_double_speed;
     }
 
     pub fn tick_number(&self) -> u32 {
@@ -877,7 +903,7 @@ impl Emulator {
                 if interrupt_bits != 0 {
                     // A pending interrupts resumes a halted CPU, even if IME is disabled and
                     // interrupt won't actually be handled.
-                    self.is_cpu_halted = false;
+                    self.resume_halted_cpu();
 
                     if self.regs().interrupts_enabled() {
                         self.handle_interrupt(Interrupt::for_bits(interrupt_bits));
@@ -893,13 +919,20 @@ impl Emulator {
         }
 
         self.tick += 1;
-        self.ticks_to_next_instruction = self.ticks_to_next_instruction.saturating_sub(1);
+
+        // CPU runs twice as fast in double speed mode
+        if self.is_double_speed() {
+            self.ticks_to_next_instruction = self.ticks_to_next_instruction.saturating_sub(2);
+        } else {
+            self.ticks_to_next_instruction = self.ticks_to_next_instruction.saturating_sub(1);
+        }
 
         // Advance states at the end of the tick
         self.advance_pending_enable_interrupts_state();
         self.advance_oam_dma_transfer_state();
         self.advance_general_purpose_vram_dma_transfer_state();
         self.advance_hblank_vram_dma_transfer_state();
+        self.advance_speed_switch_state();
     }
 
     fn handle_inputs(&mut self) {
@@ -1300,10 +1333,19 @@ impl Emulator {
     /// Advance the state of the current OAM DMA transfer each tick, if one is in progress.
     fn advance_oam_dma_transfer_state(&mut self) {
         if let Some(transfer) = &mut self.current_oam_dma_transfer {
-            transfer.ticks_remaining -= 1;
-
             if transfer.ticks_remaining == 0 {
                 self.complete_oam_dma_transfer();
+                return;
+            }
+
+            let is_double_speed = self.is_double_speed();
+            let transfer = self.current_oam_dma_transfer.as_mut().unwrap();
+
+            // OAM DMA transfers run twice as fast in double speed mode
+            if is_double_speed {
+                transfer.ticks_remaining = transfer.ticks_remaining.saturating_sub(2);
+            } else {
+                transfer.ticks_remaining -= 1;
             }
         }
     }
@@ -1430,10 +1472,32 @@ impl Emulator {
         }
     }
 
+    pub fn start_speed_switch(&mut self) {
+        self.current_speed_switch = Some(SPEED_SWITCH_TICKS);
+        self.halt_cpu();
+    }
+
+    fn advance_speed_switch_state(&mut self) {
+        if let Some(ticks_remaining) = self.current_speed_switch.as_mut() {
+            if *ticks_remaining == 0 {
+                self.resume_halted_cpu();
+                return;
+            }
+
+            *ticks_remaining -= 1;
+        }
+    }
+
     fn increment_timers(&mut self) {
         // Divider register is incremented every tick but only top byte is exposed via DIV register
         let old_divider = self.full_divider_register;
-        self.full_divider_register = self.full_divider_register.wrapping_add(1);
+
+        // Divider register increments twice as fast in double speed mode
+        if self.is_double_speed() {
+            self.full_divider_register = self.full_divider_register.wrapping_add(2);
+        } else {
+            self.full_divider_register = self.full_divider_register.wrapping_add(1);
+        }
 
         // Increment timer if there was falling edge on the TAC-selected bit of the divider register
         let has_falling_edge = (old_divider & !self.full_divider_register & self.tac_mask) != 0;

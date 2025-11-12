@@ -654,8 +654,34 @@ define_instruction!(ccf, fn (emulator, _) {
     emulator.schedule_next_instruction(4);
 });
 
-define_instruction!(stop, fn(_, _) {
-    unimplemented!("stop")
+define_instruction!(stop, fn(emulator, _) {
+    let has_button_pressed = emulator.joypad_reg() & 0x0F != 0x0F;
+    let is_speed_switch_armed = emulator.key1() & 0x01 == 1;
+    let has_interrupts = emulator.interrupt_bits() != 0;
+    let new_speed = !emulator.is_double_speed();
+
+    if emulator.in_cgb_mode() && !has_button_pressed && is_speed_switch_armed {
+        if !has_interrupts {
+            // This STOP is a two-byte instruction where the second byte is ignored
+            let _ = emulator.read_imm8_operand();
+
+            emulator.set_is_double_speed(new_speed);
+            emulator.start_speed_switch();
+            emulator.reset_divider_register();
+            emulator.write_key1(0x00);
+
+            return;
+        } else if emulator.regs().interrupts_enabled() {
+            // STOP is a one-byte insruction that immediately enters double-speed mode
+            emulator.set_is_double_speed(new_speed);
+            emulator.reset_divider_register();
+            emulator.write_key1(0x00);
+
+            return;
+        }
+    }
+
+    panic!("STOP instruction that does not result in a speed switch")
 });
 
 define_instruction!(halt, fn(emulator, _) {
