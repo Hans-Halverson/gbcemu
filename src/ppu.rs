@@ -129,7 +129,7 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
 
     // In DMG mode, sort by x coordinate (lower x has higher priority). A stable sort is used so
     // that earlier objects in OAM have higher priority when x coordinates are equal.
-    if emulator.opri() == 1 {
+    if !emulator.is_cgb_machine() || emulator.opri() == 1 {
         objects.sort_by_key(|obj| obj.x);
     }
 
