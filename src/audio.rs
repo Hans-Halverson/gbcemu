@@ -130,14 +130,42 @@ impl Iterator for BufferedSource {
         // First check if we should skip to the next frame. Make sure not to skip if between left
         // and right samples.
         if self.is_next_sample_left && self.current_tick >= (TICKS_PER_FRAME as f64 - 0.1) {
-            if let Some(next_frame_samples) = self.receiver.try_next_frame() {
-                self.current_frame_samples = next_frame_samples;
-                self.current_tick = 0.0;
-                self.next_sample_index = 0;
-            } else {
+            self.current_tick = 0.0;
+            self.next_sample_index = 0;
+
+            // Collect all pending frames to be combined into a single frame
+            let mut next_frames = vec![];
+            while let Some(frame_samples) = self.receiver.try_next_frame() {
+                next_frames.push(frame_samples);
+            }
+
+            let num_frames = next_frames.len();
+
+            match num_frames {
                 // No new frame available so loop the last full frame
-                self.current_tick = 0.0;
-                self.next_sample_index = 0;
+                0 => {}
+                // One new frame available, use it directly
+                1 => {
+                    self.current_frame_samples = next_frames.remove(0);
+                }
+                // Multiple new frames available, speed them up to fit into one frame
+                _ => {
+                    // Round up integer division to ensure we fill the entire new frame
+                    let frame_length = next_frames[0].len();
+                    let samples_per_frame = (frame_length + num_frames - 1) / num_frames;
+
+                    let mut new_frame = VecDeque::with_capacity(frame_length);
+
+                    // Choose samples evenly from each frame to fill the new frame
+                    for i in 0..frame_length {
+                        let frame_index = i / samples_per_frame;
+                        let sample_index =
+                            ((i % samples_per_frame) * num_frames).min(frame_length - 1);
+                        new_frame.push_back(next_frames[frame_index][sample_index]);
+                    }
+
+                    self.current_frame_samples = new_frame;
+                }
             }
         }
 
@@ -998,7 +1026,7 @@ impl NoiseChannel {
         // A clock divider of 0 maps to 0.5. Entire noise channel is clocked every 8 ticks instead
         // of every 16 ticks
         if self.clock_divider == 0 {
-            (self.clock_divider as u16) << self.clock_shift
+            1u16 << self.clock_shift
         } else {
             ((self.clock_divider as u16) << 1) << self.clock_shift
         }
