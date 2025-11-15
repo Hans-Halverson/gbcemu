@@ -1,5 +1,7 @@
 use std::{
     array,
+    collections::VecDeque,
+    mem,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -21,6 +23,7 @@ use crate::{
         SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE, SINGLE_WORK_RAM_BANK_SIZE,
         UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
     },
+    audio::{Apu, AudioOutput, TICKS_PER_SAMPLE, TimedSample},
     cartridge::Cartridge,
     io_registers::IoRegisters,
     machine::Machine,
@@ -134,12 +137,12 @@ const SCREEN_COLOR_PALETTE_GREEN: [Color32; 4] = [
 pub type Register = u8;
 
 /// Refresh rate of the GameBoy screen in Hz
-const REFRESH_RATE: f64 = 59.7;
+pub const REFRESH_RATE: f64 = 59.7;
 
 /// Total number of scanlines including VBlank period. Larger than the height of the screen.
 const NUM_VIRTUAL_SCANLINES: usize = 154;
 
-const TICKS_PER_FRAME: usize = 70224;
+pub const TICKS_PER_FRAME: usize = 70224;
 
 const TICKS_PER_SCANLINE: usize = TICKS_PER_FRAME / NUM_VIRTUAL_SCANLINES;
 
@@ -310,6 +313,10 @@ pub struct Emulator {
     #[serde(skip)]
     output_buffer: Option<SharedOutputBuffer>,
 
+    /// Sender for audio samples, batched by frame
+    #[serde(skip)]
+    audio_output: Option<Box<dyn AudioOutput>>,
+
     /// The save file for this ROM, if any
     #[serde(skip)]
     save_file: Option<Box<SaveFile>>,
@@ -362,6 +369,9 @@ pub struct Emulator {
 
     /// Interrupt Enable register (0xFFFF) (IE)
     ie: Register,
+
+    /// Audio Processing Unit
+    apu: Apu,
 
     /// Background color palettes (CGB only)
     cgb_background_palettes: Box<StoredCgbPalette>,
@@ -418,6 +428,9 @@ pub struct Emulator {
 
     /// Whether the emulator is currently in double speed mode
     is_double_speed: bool,
+
+    /// Queue of audio samples built in the current frame
+    audio_sample_queue: VecDeque<TimedSample>,
 }
 
 pub struct EmulatorBuilder {
@@ -472,6 +485,11 @@ impl EmulatorBuilder {
         self
     }
 
+    pub fn with_audio_output(mut self, audio_output: Box<dyn AudioOutput>) -> Self {
+        self.emulator.audio_output = Some(audio_output);
+        self
+    }
+
     pub fn build(self) -> Emulator {
         self.emulator
     }
@@ -488,6 +506,7 @@ impl Emulator {
             options: Arc::new(Options::default()),
             input_adapter: None,
             output_buffer: None,
+            audio_output: None,
             save_file: None,
             save_file_path: None,
             machine,
@@ -506,6 +525,7 @@ impl Emulator {
             cgb_object_palettes: Box::new(serde_big_array::Array([0x00; 64])),
             regs: Registers::init_for_machine(machine),
             io_regs: IoRegisters::init_for_machine(machine),
+            apu: Apu::new(),
             ie: IE_INIT,
             ticks_to_next_instruction: 0,
             pending_enable_interrupts: PendingEnableInterrupt::None,
@@ -523,6 +543,7 @@ impl Emulator {
             in_turbo_mode: false,
             is_booting: true,
             is_double_speed: false,
+            audio_sample_queue: VecDeque::new(),
         }
     }
 
@@ -576,6 +597,14 @@ impl Emulator {
 
     pub fn io_regs_mut(&mut self) -> &mut IoRegisters {
         &mut self.io_regs
+    }
+
+    pub fn apu(&self) -> &Apu {
+        &self.apu
+    }
+
+    pub fn apu_mut(&mut self) -> &mut Apu {
+        &mut self.apu
     }
 
     pub fn cgb_background_palettes(&self) -> &CgbPaletteData {
@@ -734,6 +763,13 @@ impl Emulator {
 
             // Run a single frame
             self.run_frame();
+
+            // Push a single audio frame to the audio output, if any
+            if let Some(audio_output) = &mut self.audio_output {
+                let mut audio_frame = VecDeque::new();
+                mem::swap(&mut audio_frame, &mut self.audio_sample_queue);
+                audio_output.send_frame(audio_frame);
+            }
 
             // Increment frame number (backed by microframes)
             self.microframe += self.microframes_per_frame();
@@ -918,6 +954,11 @@ impl Emulator {
             }
         }
 
+        // Sample audio if necessary
+        if self.tick % TICKS_PER_SAMPLE as u32 == 0 {
+            self.push_next_sample();
+        }
+
         self.tick += 1;
 
         // CPU runs twice as fast in double speed mode
@@ -997,6 +1038,10 @@ impl Emulator {
 
         if let Some(output_buffer) = self.output_buffer.take() {
             emulator_builder = emulator_builder.with_output_buffer(output_buffer);
+        }
+
+        if let Some(audio_output) = self.audio_output.take() {
+            emulator_builder = emulator_builder.with_audio_output(audio_output);
         }
 
         *self = emulator_builder.build();
@@ -1530,6 +1575,16 @@ impl Emulator {
 
         // Unmap the boot ROM by writing A to the bank register
         self.write_bank(self.regs().a());
+    }
+
+    /// Sample the current audio channels and push to current frame's sample queue
+    fn push_next_sample(&mut self) {
+        let (left, right) = self.sample_audio();
+        self.audio_sample_queue.push_back(TimedSample {
+            left,
+            right,
+            tick: self.tick,
+        });
     }
 }
 

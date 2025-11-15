@@ -474,6 +474,30 @@ define_registers!(
     (tac, 0xFF07, 0xF8, 0xF8, read_tac_impl, write_tac_impl),
     (if_reg, 0xFF0F, 0xE1, 0xE1, read_register_raw, write_if_impl),
     (
+        nr50,
+        0xFF24,
+        0x77,
+        0x77,
+        read_register_raw,
+        write_register_raw
+    ),
+    (
+        nr51,
+        0xFF25,
+        0xF3,
+        0xF3,
+        read_register_raw,
+        write_register_raw
+    ),
+    (
+        nr52,
+        0xFF26,
+        0xF1,
+        0xF1,
+        read_register_raw,
+        write_register_raw
+    ),
+    (
         lcdc,
         0xFF40,
         0x91,

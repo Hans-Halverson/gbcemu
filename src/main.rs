@@ -1,5 +1,6 @@
 use clap::Parser;
 use gbcemu::{
+    audio::DefaultSystemAudioOutput,
     cartridge::Cartridge,
     emulator::{EmulatorBuilder, SharedInputAdapter, SharedOutputBuffer},
     gui::start_gui,
@@ -82,6 +83,7 @@ fn start_emulator_thread(
             .with_options(options)
             .with_input_adapter(input_adapter)
             .with_output_buffer(output_buffer)
+            .with_audio_output(Box::new(DefaultSystemAudioOutput::new()))
             .build();
 
         if dump_rom_info {
