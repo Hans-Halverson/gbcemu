@@ -11,6 +11,8 @@ use crate::emulator::{REFRESH_RATE, Register, TICKS_PER_FRAME};
 /// Rate to sample audio during playback, in Hz
 const SAMPLE_RATE: u32 = 44100;
 
+pub const NUM_AUDIO_CHANNELS: u8 = 4;
+
 pub const TICKS_PER_SAMPLE: f64 = (TICKS_PER_FRAME as f64 * REFRESH_RATE) / (SAMPLE_RATE as f64);
 
 /// A generic audio output device which can be attached to an emulator
@@ -210,6 +212,12 @@ pub struct Apu {
 
     /// Full NR51 register value. Each bit controls whether left/right output uses each channel.
     nr51: Register,
+
+    /// Debug flags to disable each channel's output
+    debug_disable_channel_1: bool,
+    debug_disable_channel_2: bool,
+    debug_disable_channel_3: bool,
+    debug_disable_channel_4: bool,
 }
 
 impl Apu {
@@ -221,6 +229,10 @@ impl Apu {
             left_volume: 0,
             right_volume: 0,
             nr51: 0,
+            debug_disable_channel_1: false,
+            debug_disable_channel_2: false,
+            debug_disable_channel_3: false,
+            debug_disable_channel_4: false,
         }
     }
 
@@ -230,6 +242,16 @@ impl Apu {
 
     pub fn channel_2_mut(&mut self) -> &mut PulseChannel {
         &mut self.channel_2
+    }
+
+    pub fn toggle_channel(&mut self, channel: usize) {
+        match channel {
+            1 => self.debug_disable_channel_1 = !self.debug_disable_channel_1,
+            2 => self.debug_disable_channel_2 = !self.debug_disable_channel_2,
+            3 => self.debug_disable_channel_3 = !self.debug_disable_channel_3,
+            4 => self.debug_disable_channel_4 = !self.debug_disable_channel_4,
+            _ => {}
+        }
     }
 
     pub fn advance_div_apu(&mut self) {
@@ -274,7 +296,7 @@ impl Apu {
         let nr51 = self.nr51;
 
         // Mix in channel 1
-        if nr51 & 0x11 != 0 {
+        if nr51 & 0x11 != 0 && !self.debug_disable_channel_1 {
             let sample = self.channel_1.sample_analog();
             if nr51 & 0x01 != 0 {
                 mixed_right += sample;
@@ -286,7 +308,7 @@ impl Apu {
         }
 
         // Mix in channel 2
-        if nr51 & 0x22 != 0 {
+        if nr51 & 0x22 != 0 && !self.debug_disable_channel_2 {
             let sample = self.channel_2.sample_analog();
 
             if nr51 & 0x02 != 0 {
@@ -299,7 +321,7 @@ impl Apu {
         }
 
         // Mix in channel 3
-        if nr51 & 0x44 != 0 {
+        if nr51 & 0x44 != 0 && !self.debug_disable_channel_3 {
             let sample = self.sample_channel_3_analog();
 
             if nr51 & 0x04 != 0 {
@@ -312,7 +334,7 @@ impl Apu {
         }
 
         // Mix in channel 4
-        if nr51 & 0x88 != 0 {
+        if nr51 & 0x88 != 0 && !self.debug_disable_channel_4 {
             let sample = self.sample_channel_4_analog();
             if nr51 & 0x08 != 0 {
                 mixed_right += sample;

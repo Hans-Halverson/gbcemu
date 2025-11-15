@@ -108,6 +108,8 @@ pub enum Command {
     LoadQuickSave(usize),
     /// Set whether the emulator is in turbo mode
     SetTurboMode(bool),
+    /// Toggle the given audio channel on or off
+    ToggleAudioChannel(usize),
 }
 
 impl SharedInputAdapter {
@@ -994,6 +996,7 @@ impl Emulator {
                 Command::QuickSave(slot) => self.quick_save(slot),
                 Command::LoadQuickSave(slot) => self.load_quick_save(slot),
                 Command::SetTurboMode(in_turbo_mode) => self.in_turbo_mode = in_turbo_mode,
+                Command::ToggleAudioChannel(channel) => self.apu_mut().toggle_channel(channel),
             }
         }
     }

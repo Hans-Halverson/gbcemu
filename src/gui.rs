@@ -5,11 +5,12 @@ use eframe::{
     epaint::CornerRadius,
 };
 use muda::{
-    Menu, MenuEvent, MenuItem, Submenu,
+    CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu,
     accelerator::{Accelerator, Code, Modifiers},
 };
 
 use crate::{
+    audio::NUM_AUDIO_CHANNELS,
     emulator::{Button, Command, SCREEN_HEIGHT, SCREEN_WIDTH, SharedOutputBuffer},
     save_file::NUM_QUICK_SAVE_SLOTS,
 };
@@ -77,6 +78,15 @@ impl GuiApp {
                     {
                         let slot = usize::from_str(slot_number).unwrap();
                         self.commands_tx.send(Command::LoadQuickSave(slot)).unwrap();
+                    }
+
+                    if let Some(channel_number) =
+                        item_id.strip_prefix(TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX)
+                    {
+                        let channel = usize::from_str(channel_number).unwrap();
+                        self.commands_tx
+                            .send(Command::ToggleAudioChannel(channel))
+                            .unwrap();
                     }
                 }
             }
@@ -188,6 +198,7 @@ const SAVE_ITEM_ID: &str = "save";
 const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
 const QUICK_SAVE_ITEM_ID_PREFIX: &str = "quick_save_";
 const LOAD_QUICK_SAVE_ITEM_ID_PREFIX: &str = "load_quick_save_";
+const TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX: &str = "toggle_audio_channel_";
 
 fn create_app_menu() -> Menu {
     let menu = Menu::new();
@@ -249,6 +260,26 @@ fn create_app_menu() -> Menu {
     )
     .unwrap();
 
+    let channels_submenu = Submenu::new("Channels", true);
+
+    for i in 0..NUM_AUDIO_CHANNELS {
+        let channel = i + 1;
+        channels_submenu
+            .append(&CheckMenuItem::with_id(
+                format!("{TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX}{channel}"),
+                format!("Channel {channel}"),
+                true,
+                true,
+                Some(Accelerator::new(
+                    Some(Modifiers::ALT | Modifiers::META),
+                    Code::from_str(&format!("Digit{channel}")).unwrap(),
+                )),
+            ))
+            .unwrap();
+    }
+
+    let audio_menu = Submenu::with_items("Audio", true, &[&channels_submenu]).unwrap();
+
     let window_menu = Submenu::with_items(
         "Window",
         true,
@@ -263,6 +294,7 @@ fn create_app_menu() -> Menu {
 
     menu.append(&app_name_menu).unwrap();
     menu.append(&emulator_menu).unwrap();
+    menu.append(&audio_menu).unwrap();
     menu.append(&window_menu).unwrap();
 
     #[cfg(target_os = "macos")]
