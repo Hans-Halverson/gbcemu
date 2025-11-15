@@ -181,6 +181,56 @@ impl Emulator {
         self.write_if_reg_raw(0xE0 | (0x1F & value));
     }
 
+    fn write_nr11_impl(&mut self, _: Address, value: Register) {
+        self.write_nr11_raw(value);
+        self.apu_mut().channel_1_mut().write_nrx1(value);
+    }
+
+    fn write_nr12_impl(&mut self, _: Address, value: Register) {
+        self.write_nr12_raw(value);
+        self.apu_mut().channel_1_mut().write_nrx2(value);
+    }
+
+    fn write_nr13_impl(&mut self, _: Address, value: Register) {
+        self.write_nr13_raw(value);
+        self.apu_mut().channel_1_mut().write_nrx3(value);
+    }
+
+    fn write_nr14_impl(&mut self, _: Address, value: Register) {
+        self.write_nr14_raw(value);
+        self.apu_mut().channel_1_mut().write_nrx4(value);
+    }
+
+    fn write_nr21_impl(&mut self, _: Address, value: Register) {
+        self.write_nr21_raw(value);
+        self.apu_mut().channel_2_mut().write_nrx1(value);
+    }
+
+    fn write_nr22_impl(&mut self, _: Address, value: Register) {
+        self.write_nr22_raw(value);
+        self.apu_mut().channel_2_mut().write_nrx2(value);
+    }
+
+    fn write_nr23_impl(&mut self, _: Address, value: Register) {
+        self.write_nr23_raw(value);
+        self.apu_mut().channel_2_mut().write_nrx3(value);
+    }
+
+    fn write_nr24_impl(&mut self, _: Address, value: Register) {
+        self.write_nr24_raw(value);
+        self.apu_mut().channel_2_mut().write_nrx4(value);
+    }
+
+    fn write_nr50_impl(&mut self, _: Address, value: Register) {
+        self.write_nr50_raw(value);
+        self.apu_mut().write_nr50(value);
+    }
+
+    fn write_nr51_impl(&mut self, _: Address, value: Register) {
+        self.write_nr51_raw(value);
+        self.apu_mut().write_nr51(value);
+    }
+
     fn read_lcd_stat_impl(&self, _: Address) -> Register {
         // Construct the STAT register value on reads, allowing for raw writes.
         let raw = self.stat_raw();
@@ -474,21 +524,23 @@ define_registers!(
     (tac, 0xFF07, 0xF8, 0xF8, read_tac_impl, write_tac_impl),
     (if_reg, 0xFF0F, 0xE1, 0xE1, read_register_raw, write_if_impl),
     (
-        nr50,
-        0xFF24,
-        0x77,
-        0x77,
+        nr10,
+        0xFF10,
+        0x80,
+        0x80,
         read_register_raw,
         write_register_raw
     ),
-    (
-        nr51,
-        0xFF25,
-        0xF3,
-        0xF3,
-        read_register_raw,
-        write_register_raw
-    ),
+    (nr11, 0xFF11, 0xBF, 0xBF, read_register_raw, write_nr11_impl),
+    (nr12, 0xFF12, 0xF3, 0xF3, read_register_raw, write_nr12_impl),
+    (nr13, 0xFF13, 0xFF, 0xFF, read_register_raw, write_nr13_impl),
+    (nr14, 0xFF14, 0xBF, 0xBF, read_register_raw, write_nr14_impl),
+    (nr21, 0xFF16, 0x3F, 0x3F, read_register_raw, write_nr21_impl),
+    (nr22, 0xFF17, 0x00, 0x00, read_register_raw, write_nr22_impl),
+    (nr23, 0xFF18, 0xFF, 0xFF, read_register_raw, write_nr23_impl),
+    (nr24, 0xFF19, 0xBF, 0xBF, read_register_raw, write_nr24_impl),
+    (nr50, 0xFF24, 0x77, 0x77, read_register_raw, write_nr50_impl),
+    (nr51, 0xFF25, 0xF3, 0xF3, read_register_raw, write_nr51_impl),
     (
         nr52,
         0xFF26,

@@ -6,7 +6,7 @@ use std::{
 use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::{Deserialize, Serialize};
 
-use crate::emulator::{Emulator, REFRESH_RATE, TICKS_PER_FRAME};
+use crate::emulator::{REFRESH_RATE, Register, TICKS_PER_FRAME};
 
 /// Rate to sample audio during playback, in Hz
 const SAMPLE_RATE: u32 = 44100;
@@ -190,72 +190,136 @@ impl AudioOutput for DefaultSystemAudioOutput {
     }
 }
 
+/// Map digital 0x0-0xF to analog 1.0 to -1.0
+fn digital_to_analog(digit: u8) -> f32 {
+    1.0 - ((digit as f32) / 7.5)
+}
+
 /// Audio processing unit
 #[derive(Serialize, Deserialize)]
-pub struct Apu;
+pub struct Apu {
+    channel_1: PulseChannel,
+    channel_2: PulseChannel,
+    div_apu: u8,
+
+    /// Volume for left output channel. Part of NR51 register.
+    left_volume: u8,
+
+    /// Volume for right output channel. Part of NR51 register.
+    right_volume: u8,
+
+    /// Full NR51 register value. Each bit controls whether left/right output uses each channel.
+    nr51: Register,
+}
 
 impl Apu {
     pub fn new() -> Self {
-        Self
+        Self {
+            channel_1: PulseChannel::new(),
+            channel_2: PulseChannel::new(),
+            div_apu: 0,
+            left_volume: 0,
+            right_volume: 0,
+            nr51: 0,
+        }
     }
-}
 
-impl Emulator {
+    pub fn channel_1_mut(&mut self) -> &mut PulseChannel {
+        &mut self.channel_1
+    }
+
+    pub fn channel_2_mut(&mut self) -> &mut PulseChannel {
+        &mut self.channel_2
+    }
+
+    pub fn advance_div_apu(&mut self) {
+        let old_div_apu = self.div_apu;
+        self.div_apu = self.div_apu.wrapping_add(1);
+
+        let falling_edges = old_div_apu & !self.div_apu;
+
+        if (falling_edges & 0x1) != 0 {
+            self.advance_length_timers();
+        }
+
+        if (falling_edges & 0x4) != 0 {
+            self.channel_1.advance_envelope_timer();
+            self.channel_2.advance_envelope_timer();
+        }
+    }
+
+    pub fn run_m_tick(&mut self) {
+        self.channel_1.run_m_tick();
+        self.channel_2.run_m_tick();
+    }
+
+    pub fn advance_length_timers(&mut self) {
+        self.channel_1.advance_length_timer();
+        self.channel_2.advance_length_timer();
+    }
+
+    pub fn write_nr50(&mut self, value: Register) {
+        self.left_volume = (value & 0x70) >> 4;
+        self.right_volume = value & 0x7;
+    }
+
+    pub fn write_nr51(&mut self, value: Register) {
+        self.nr51 = value;
+    }
+
     pub fn sample_audio(&self) -> (f32, f32) {
         let mut mixed_left = 0.0;
         let mut mixed_right = 0.0;
 
-        let nr51 = self.nr51();
+        let nr51 = self.nr51;
 
         // Mix in channel 1
         if nr51 & 0x11 != 0 {
-            let (left, right) = self.sample_channel_1_analog();
-
+            let sample = self.channel_1.sample_analog();
             if nr51 & 0x01 != 0 {
-                mixed_right += right;
+                mixed_right += sample;
             }
 
             if nr51 & 0x10 != 0 {
-                mixed_left += left;
+                mixed_left += sample;
             }
         }
 
         // Mix in channel 2
         if nr51 & 0x22 != 0 {
-            let (left, right) = self.sample_channel_2_analog();
+            let sample = self.channel_2.sample_analog();
 
             if nr51 & 0x02 != 0 {
-                mixed_right += right;
+                mixed_right += sample;
             }
 
             if nr51 & 0x20 != 0 {
-                mixed_left += left;
+                mixed_left += sample;
             }
         }
 
         // Mix in channel 3
         if nr51 & 0x44 != 0 {
-            let (left, right) = self.sample_channel_3_analog();
+            let sample = self.sample_channel_3_analog();
 
             if nr51 & 0x04 != 0 {
-                mixed_right += right;
+                mixed_right += sample;
             }
 
             if nr51 & 0x40 != 0 {
-                mixed_left += left;
+                mixed_left += sample;
             }
         }
 
         // Mix in channel 4
         if nr51 & 0x88 != 0 {
-            let (left, right) = self.sample_channel_4_analog();
-
+            let sample = self.sample_channel_4_analog();
             if nr51 & 0x08 != 0 {
-                mixed_right += right;
+                mixed_right += sample;
             }
 
             if nr51 & 0x80 != 0 {
-                mixed_left += left;
+                mixed_left += sample;
             }
         }
 
@@ -263,30 +327,218 @@ impl Emulator {
         mixed_left /= 4.0;
         mixed_right /= 4.0;
 
-        let nr50 = self.nr50();
-        let left_volume = (nr50 & 0x70) >> 4;
-        let right_volume = nr50 & 0x7;
-
         // Scale by channel volumes, 0 == volume 1, 7 == volume 8
-        let final_left = mixed_left * (left_volume as f32 + 1.0 / 8.0);
-        let final_right = mixed_right * (right_volume as f32 + 1.0 / 8.0);
+        let final_left = mixed_left * ((self.left_volume as f32 + 1.0) / 8.0);
+        let final_right = mixed_right * ((self.right_volume as f32 + 1.0) / 8.0);
 
         (final_left, final_right)
     }
 
-    fn sample_channel_1_analog(&self) -> (f32, f32) {
-        (0.0, 0.0)
+    fn sample_channel_3_analog(&self) -> f32 {
+        0.0
     }
 
-    fn sample_channel_2_analog(&self) -> (f32, f32) {
-        (0.0, 0.0)
+    fn sample_channel_4_analog(&self) -> f32 {
+        0.0
+    }
+}
+
+const DUTY_WAVEFORM_LENGTH: usize = 8;
+
+const DUTY_CYCLE_WAVEFORMS: [[u8; DUTY_WAVEFORM_LENGTH]; 4] = [
+    // 12.5% duty cycle
+    [1, 1, 1, 1, 1, 1, 1, 0],
+    // 25% duty cycle
+    [0, 1, 1, 1, 1, 1, 1, 0],
+    // 50% duty cycle
+    [0, 1, 1, 1, 1, 0, 0, 0],
+    // 75% duty cycle
+    [1, 0, 0, 0, 0, 0, 0, 1],
+];
+
+#[derive(Serialize, Deserialize)]
+pub struct PulseChannel {
+    /// Duty cycle index [0, 4)
+    duty_cycle: u8,
+
+    //// Index into duty sample waveform [0-8)
+    duty_sample_index: u8,
+
+    /// A counter down to 0, at which point the period ends and a sample is taken
+    period_counter: u16,
+
+    /// Raw value of the full period register (11 bits)
+    period_register: u16,
+
+    /// Whether the length timer is enabled
+    is_length_timer_enabled: bool,
+
+    /// Value the length timer is reset to
+    initial_length_timer: u8,
+
+    /// A counter down to 0 at which point the channel is disabled
+    length_timer: u8,
+
+    /// Whether the envelope is incrementing or decrementing
+    is_envelope_up: bool,
+
+    /// Value to reset the envelope timer to, 3 bits
+    envelope_sweep_pace: u8,
+
+    /// A counter down to 0, at which point the volume is updated due to the envelope
+    envelope_timer: u8,
+
+    /// Value of the initial volume register
+    initial_volume: u8,
+
+    /// Current digital volume
+    volume: u8,
+
+    /// Whether the channel is enabled, disabled channels produce silence
+    enabled: bool,
+}
+
+impl PulseChannel {
+    fn new() -> Self {
+        Self {
+            duty_cycle: 0,
+            duty_sample_index: 0,
+            period_counter: 0,
+            period_register: 0,
+            is_length_timer_enabled: false,
+            initial_length_timer: 0,
+            length_timer: 0,
+            initial_volume: 0,
+            is_envelope_up: false,
+            envelope_sweep_pace: 0,
+            envelope_timer: 0,
+            volume: 0,
+            enabled: false,
+        }
     }
 
-    fn sample_channel_3_analog(&self) -> (f32, f32) {
-        (0.0, 0.0)
+    pub fn write_nrx1(&mut self, value: Register) {
+        // Upper two bits of NRX1
+        self.duty_cycle = (value & 0xC0) >> 6;
+
+        // Lower six bits of NRX1
+        self.initial_length_timer = 64 - (value & 0x3F);
     }
 
-    fn sample_channel_4_analog(&self) -> (f32, f32) {
-        (0.0, 0.0)
+    pub fn write_nrx2(&mut self, value: Register) {
+        // Upper four bits of NRX2
+        self.initial_volume = (value & 0xF0) >> 4;
+
+        // Bit three of NRX2
+        self.is_envelope_up = (value & 0x08) != 0;
+
+        // Lower three bits of NRX2
+        self.envelope_sweep_pace = value & 0x07;
+
+        // If the envelope's initial volume is 0 and envelope is decreasing, disable the channel
+        if self.initial_volume == 0 && !self.is_envelope_up {
+            self.enabled = false;
+        }
+    }
+
+    pub fn write_nrx3(&mut self, value: Register) {
+        // All of NRX3 is lower bits of period register
+        self.period_register = (self.period_register & 0x0700) | (value as u16);
+    }
+
+    pub fn write_nrx4(&mut self, value: Register) {
+        // Lower three bits of NRX4 are upper bits of period register
+        self.period_register = (self.period_register & 0x00FF) | (((value as u16) & 0x7) << 8);
+
+        // Bit 6 of NRX4
+        self.is_length_timer_enabled = value & 0x40 != 0;
+
+        if self.is_length_timer_enabled {
+            self.length_timer = self.initial_length_timer;
+        }
+
+        // Bit 7 of NRX4
+        let is_triggered = value & 0x80 != 0;
+        if is_triggered {
+            self.trigger();
+        }
+    }
+
+    fn trigger(&mut self) {
+        self.enabled = true;
+        self.period_counter = self.initial_period_counter();
+        self.volume = self.initial_volume;
+
+        if self.length_timer == 0 {
+            self.length_timer = self.initial_length_timer;
+        }
+
+        if self.envelope_sweep_pace != 0 {
+            self.envelope_timer = self.envelope_sweep_pace;
+        }
+    }
+
+    fn initial_period_counter(&self) -> u16 {
+        2048 - self.period_register
+    }
+
+    fn sample_digital(&self) -> u8 {
+        let duty_waveform = DUTY_CYCLE_WAVEFORMS[self.duty_cycle as usize];
+        let duty_waveform_sample = duty_waveform[self.duty_sample_index as usize];
+
+        duty_waveform_sample * self.volume
+    }
+
+    fn sample_analog(&self) -> f32 {
+        if !self.enabled {
+            return 0.0;
+        }
+
+        digital_to_analog(self.sample_digital())
+    }
+
+    fn run_m_tick(&mut self) {
+        // Subtracting would overflow so period is over
+        if self.period_counter == 0 {
+            // Advance to next duty sample
+            self.duty_sample_index = (self.duty_sample_index + 1) % DUTY_WAVEFORM_LENGTH as u8;
+
+            // Reload period counter
+            self.period_counter = self.initial_period_counter();
+        }
+
+        self.period_counter -= 1;
+    }
+
+    fn advance_length_timer(&mut self) {
+        if self.is_length_timer_enabled && self.length_timer > 0 {
+            self.length_timer -= 1;
+
+            if self.length_timer == 0 {
+                self.enabled = false;
+            }
+        }
+    }
+
+    fn advance_envelope_timer(&mut self) {
+        if self.envelope_sweep_pace == 0 {
+            return;
+        }
+
+        if self.envelope_timer > 0 {
+            self.envelope_timer -= 1;
+        }
+
+        if self.envelope_timer == 0 {
+            // Reset envelope timer
+            self.envelope_timer = self.envelope_sweep_pace;
+
+            // Update volume due to envelope, clamping to [0x0, 0xF]
+            if self.is_envelope_up && self.volume < 0xF {
+                self.volume += 1;
+            } else if !self.is_envelope_up && self.volume > 0x0 {
+                self.volume -= 1;
+            }
+        }
     }
 }

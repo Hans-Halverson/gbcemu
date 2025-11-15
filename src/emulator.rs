@@ -932,6 +932,10 @@ impl Emulator {
         self.handle_inputs();
         self.increment_timers();
 
+        if self.tick % 4 == 0 {
+            self.apu_mut().run_m_tick();
+        }
+
         // Ready for next instruction. Either execute the next instruction or an interrupt handler.
         'handled: {
             if self.ticks_to_next_instruction == 0 {
@@ -1536,17 +1540,22 @@ impl Emulator {
     fn increment_timers(&mut self) {
         // Divider register is incremented every tick but only top byte is exposed via DIV register
         let old_divider = self.full_divider_register;
+        let div_apu_falling_edge_mask;
 
         // Divider register increments twice as fast in double speed mode
         if self.is_double_speed() {
             self.full_divider_register = self.full_divider_register.wrapping_add(2);
+            div_apu_falling_edge_mask = 0x2000;
         } else {
             self.full_divider_register = self.full_divider_register.wrapping_add(1);
+            div_apu_falling_edge_mask = 0x1000;
         }
 
+        let falling_edges = old_divider & !self.full_divider_register;
+
         // Increment timer if there was falling edge on the TAC-selected bit of the divider register
-        let has_falling_edge = (old_divider & !self.full_divider_register & self.tac_mask) != 0;
-        if has_falling_edge && self.is_timer_enabled {
+        let has_tac_falling_edge = (falling_edges & self.tac_mask) != 0;
+        if has_tac_falling_edge && self.is_timer_enabled {
             let (new_tima, overflowed) = self.tima().overflowing_add(1);
 
             // Reset to TMA and generate an interrupt when timer overflows
@@ -1556,6 +1565,12 @@ impl Emulator {
             } else {
                 self.write_tima(new_tima);
             }
+        }
+
+        // Increment APU divider if there was a falling edge on the appropriate bit
+        let has_div_apu_falling_edge = (falling_edges & div_apu_falling_edge_mask) != 0;
+        if has_div_apu_falling_edge {
+            self.apu_mut().advance_div_apu();
         }
     }
 
@@ -1579,7 +1594,7 @@ impl Emulator {
 
     /// Sample the current audio channels and push to current frame's sample queue
     fn push_next_sample(&mut self) {
-        let (left, right) = self.sample_audio();
+        let (left, right) = self.apu().sample_audio();
         self.audio_sample_queue.push_back(TimedSample {
             left,
             right,
