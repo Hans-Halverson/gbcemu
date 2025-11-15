@@ -212,6 +212,9 @@ pub struct Apu {
     /// Channel 3: Custom wave channel
     channel_3: WaveChannel,
 
+    /// Channel 4: Noise channel
+    channel_4: NoiseChannel,
+
     /// The internal DIV-APU counter, incremented at 512 Hz
     div_apu: u8,
 
@@ -237,6 +240,7 @@ impl Apu {
             channel_1: PulseChannel::new(/* has_sweep */ true),
             channel_2: PulseChannel::new(/* has_sweep */ false),
             channel_3: WaveChannel::new(),
+            channel_4: NoiseChannel::new(),
             div_apu: 0,
             left_volume: 0,
             right_volume: 0,
@@ -260,6 +264,10 @@ impl Apu {
         &mut self.channel_3
     }
 
+    pub fn channel_4_mut(&mut self) -> &mut NoiseChannel {
+        &mut self.channel_4
+    }
+
     pub fn toggle_channel(&mut self, channel: usize) {
         match channel {
             1 => self.debug_disable_channel_1 = !self.debug_disable_channel_1,
@@ -280,6 +288,7 @@ impl Apu {
             self.channel_1.advance_length_timer();
             self.channel_2.advance_length_timer();
             self.channel_3.advance_length_timer();
+            self.channel_4.advance_length_timer();
         }
 
         if (falling_edges & 0x2) != 0 {
@@ -289,6 +298,7 @@ impl Apu {
         if (falling_edges & 0x4) != 0 {
             self.channel_1.advance_envelope_timer();
             self.channel_2.advance_envelope_timer();
+            self.channel_4.advance_envelope_timer();
         }
     }
 
@@ -302,6 +312,12 @@ impl Apu {
         // Wave channel advance period every 2 ticks
         if tick_number % 2 == 0 {
             self.channel_3.advance_period_timer();
+        }
+
+        // Noise channel advance period every 8 ticks, as this is the smallest possible period
+        // (when clock divider and shift are both 0).
+        if tick_number % 8 == 0 {
+            self.channel_4.advance_period_timer();
         }
     }
 
@@ -360,7 +376,7 @@ impl Apu {
 
         // Mix in channel 4
         if nr51 & 0x88 != 0 && !self.debug_disable_channel_4 {
-            let sample = self.sample_channel_4_analog();
+            let sample = self.channel_4.sample_analog();
             if nr51 & 0x08 != 0 {
                 mixed_right += sample;
             }
@@ -379,10 +395,6 @@ impl Apu {
         let final_right = mixed_right * ((self.right_volume as f32 + 1.0) / 8.0);
 
         (final_left, final_right)
-    }
-
-    fn sample_channel_4_analog(&self) -> f32 {
-        0.0
     }
 }
 
@@ -846,6 +858,226 @@ impl WaveChannel {
 
             if self.length_timer == 0 {
                 self.is_enabled = false;
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct NoiseChannel {
+    /// Whether the channel is enabled, disabled channels produce silence
+    is_enabled: bool,
+
+    /// If true the LFSR is 15 bits wide, otherwise 7 bits wide
+    is_lfsr_wide: bool,
+
+    /// The LFSR register itself
+    lfsr: u16,
+
+    /// Whether the current sample bit is set (i.e. the last bit shifted out of the LFSR)
+    current_sample_bit: bool,
+
+    /// Part of NR43 used to calculate clock timer
+    clock_shift: u8,
+
+    /// Part of NR43 used to calculate clock timer
+    clock_divider: u8,
+
+    /// A counter down to 0, at which point a new noise sample is generated from the LFSR
+    clock_timer: u16,
+
+    /// Whether the length timer is enabled
+    is_length_timer_enabled: bool,
+
+    /// Value the length timer is reset to
+    initial_length_timer: u8,
+
+    /// A counter down to 0 at which point the channel is disabled
+    length_timer: u8,
+
+    /// Whether the envelope is incrementing or decrementing
+    is_envelope_up: bool,
+
+    /// Value to reset the envelope timer to, 3 bits
+    envelope_sweep_pace: u8,
+
+    /// A counter down to 0, at which point the volume is updated due to the envelope
+    envelope_timer: u8,
+
+    /// Value of the initial volume register
+    initial_volume: u8,
+
+    /// Current digital volume
+    volume: u8,
+}
+
+impl NoiseChannel {
+    fn new() -> Self {
+        Self {
+            is_enabled: false,
+            is_lfsr_wide: false,
+            lfsr: 0,
+            current_sample_bit: false,
+            clock_shift: 0,
+            clock_divider: 0,
+            clock_timer: 0,
+            is_length_timer_enabled: false,
+            initial_length_timer: 0,
+            length_timer: 0,
+            is_envelope_up: false,
+            envelope_sweep_pace: 0,
+            envelope_timer: 0,
+            initial_volume: 0,
+            volume: 0,
+        }
+    }
+
+    pub fn write_nr41(&mut self, value: Register) {
+        // Lower six bits of NR41
+        self.initial_length_timer = 64 - (value & 0x3F);
+    }
+
+    pub fn write_nr42(&mut self, value: Register) {
+        // Upper four bits of NRX2
+        self.initial_volume = (value & 0xF0) >> 4;
+
+        // Bit three of NRX2
+        self.is_envelope_up = (value & 0x08) != 0;
+
+        // Lower three bits of NRX2
+        self.envelope_sweep_pace = value & 0x07;
+
+        // If the envelope's initial volume is 0 and envelope is decreasing, disable the channel
+        if self.initial_volume == 0 && !self.is_envelope_up {
+            self.is_enabled = false;
+        }
+    }
+
+    pub fn write_nr43(&mut self, value: Register) {
+        // Clock divider is lower three bits
+        self.clock_divider = value & 0x7;
+
+        // LFSR width is bit three
+        self.is_lfsr_wide = (value & 0x8) == 0;
+
+        // Top four bits are the shift clock frequency
+        self.clock_shift = (value & 0xF0) >> 4;
+    }
+
+    pub fn write_nr44(&mut self, value: Register) {
+        // Bit 6 of NR44
+        self.is_length_timer_enabled = value & 0x40 != 0;
+
+        if self.is_length_timer_enabled {
+            self.length_timer = self.initial_length_timer;
+        }
+
+        // Bit 7 of NR44
+        let is_triggered = value & 0x80 != 0;
+        if is_triggered {
+            self.trigger();
+        }
+    }
+
+    fn trigger(&mut self) {
+        self.is_enabled = true;
+        self.clock_timer = self.initial_clock_timer();
+        self.volume = self.initial_volume;
+        self.lfsr = 0;
+
+        if self.length_timer == 0 {
+            self.length_timer = self.initial_length_timer;
+        }
+
+        if self.envelope_sweep_pace != 0 {
+            self.envelope_timer = self.envelope_sweep_pace;
+        }
+    }
+
+    fn initial_clock_timer(&self) -> u16 {
+        // A clock divider of 0 maps to 0.5. Entire noise channel is clocked every 8 ticks instead
+        // of every 16 ticks
+        if self.clock_divider == 0 {
+            (self.clock_divider as u16) << self.clock_shift
+        } else {
+            ((self.clock_divider as u16) << 1) << self.clock_shift
+        }
+    }
+
+    fn sample_digital(&self) -> u8 {
+        if self.current_sample_bit {
+            self.volume
+        } else {
+            0
+        }
+    }
+
+    fn sample_analog(&self) -> f32 {
+        if !self.is_enabled {
+            return 0.0;
+        }
+
+        digital_to_analog(self.sample_digital())
+    }
+
+    fn advance_period_timer(&mut self) {
+        // Clock shift of 14 or 15 actually stops the channel from being clocked entirely
+        if self.clock_shift >= 14 {
+            return;
+        }
+
+        // Subtracting would overflow so period is over
+        if self.clock_timer == 0 {
+            // Advance the LFSR. Last bit becomes the current sample bit.
+            let new_bit = !(self.lfsr ^ (self.lfsr >> 1)) & 0x1;
+
+            if self.is_lfsr_wide {
+                // Wide LFSR copies new bit to bit 15
+                self.lfsr = (self.lfsr & 0x7FFF) | ((new_bit << 15) & 0x8000);
+            } else {
+                // Narrow LFSR copies new bit to bit 7
+                self.lfsr = (self.lfsr & 0x7F) | ((new_bit << 7) & 0x80);
+            }
+
+            // LFSR is shifted right one bit
+            self.lfsr >>= 1;
+            self.current_sample_bit = self.lfsr & 0x1 != 0;
+
+            // Reload period timer
+            self.clock_timer = self.initial_clock_timer();
+        }
+
+        self.clock_timer -= 1;
+    }
+
+    fn advance_length_timer(&mut self) {
+        if self.is_length_timer_enabled && self.length_timer > 0 {
+            self.length_timer -= 1;
+
+            if self.length_timer == 0 {
+                self.is_enabled = false;
+            }
+        }
+    }
+
+    fn advance_envelope_timer(&mut self) {
+        if self.envelope_sweep_pace == 0 {
+            return;
+        }
+
+        if self.envelope_timer > 0 {
+            self.envelope_timer -= 1;
+        }
+
+        if self.envelope_timer == 0 {
+            // Reset envelope timer
+            self.envelope_timer = self.envelope_sweep_pace;
+
+            // Update volume due to envelope, clamping to [0x0, 0xF]
+            if self.is_envelope_up && self.volume < 0xF {
+                self.volume += 1;
+            } else if !self.is_envelope_up && self.volume > 0x0 {
+                self.volume -= 1;
             }
         }
     }

@@ -251,6 +251,26 @@ impl Emulator {
         self.apu_mut().channel_3_mut().write_nr34(value);
     }
 
+    fn write_nr41_impl(&mut self, _: Address, value: Register) {
+        self.write_nr41_raw(value);
+        self.apu_mut().channel_4_mut().write_nr41(value);
+    }
+
+    fn write_nr42_impl(&mut self, _: Address, value: Register) {
+        self.write_nr42_raw(value);
+        self.apu_mut().channel_4_mut().write_nr42(value);
+    }
+
+    fn write_nr43_impl(&mut self, _: Address, value: Register) {
+        self.write_nr43_raw(value);
+        self.apu_mut().channel_4_mut().write_nr43(value);
+    }
+
+    fn write_nr44_impl(&mut self, _: Address, value: Register) {
+        self.write_nr44_raw(value);
+        self.apu_mut().channel_4_mut().write_nr44(value);
+    }
+
     fn write_nr50_impl(&mut self, _: Address, value: Register) {
         self.write_nr50_raw(value);
         self.apu_mut().write_nr50(value);
@@ -574,6 +594,10 @@ define_registers!(
     (nr32, 0xFF1C, 0x9F, 0x9F, read_register_raw, write_nr32_impl),
     (nr33, 0xFF1D, 0xFF, 0xFF, read_register_raw, write_nr33_impl),
     (nr34, 0xFF1E, 0xBF, 0xBF, read_register_raw, write_nr34_impl),
+    (nr41, 0xFF20, 0xFF, 0xFF, read_register_raw, write_nr41_impl),
+    (nr42, 0xFF21, 0x00, 0x00, read_register_raw, write_nr42_impl),
+    (nr43, 0xFF22, 0x00, 0x00, read_register_raw, write_nr43_impl),
+    (nr44, 0xFF23, 0xBF, 0xBF, read_register_raw, write_nr44_impl),
     (nr50, 0xFF24, 0x77, 0x77, read_register_raw, write_nr50_impl),
     (nr51, 0xFF25, 0xF3, 0xF3, read_register_raw, write_nr51_impl),
     (
