@@ -934,9 +934,8 @@ impl Emulator {
         self.handle_inputs();
         self.increment_timers();
 
-        if self.tick % 4 == 0 {
-            self.apu_mut().run_m_tick();
-        }
+        let old_tick_number = self.tick;
+        self.apu_mut().advance_period_timers(old_tick_number);
 
         // Ready for next instruction. Either execute the next instruction or an interrupt handler.
         'handled: {

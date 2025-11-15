@@ -226,6 +226,31 @@ impl Emulator {
         self.apu_mut().channel_2_mut().write_nrx4(value);
     }
 
+    fn write_nr30_impl(&mut self, _: Address, value: Register) {
+        self.write_nr30_raw(value);
+        self.apu_mut().channel_3_mut().write_nr30(value);
+    }
+
+    fn write_nr31_impl(&mut self, _: Address, value: Register) {
+        self.write_nr31_raw(value);
+        self.apu_mut().channel_3_mut().write_nr31(value);
+    }
+
+    fn write_nr32_impl(&mut self, _: Address, value: Register) {
+        self.write_nr32_raw(value);
+        self.apu_mut().channel_3_mut().write_nr32(value);
+    }
+
+    fn write_nr33_impl(&mut self, _: Address, value: Register) {
+        self.write_nr33_raw(value);
+        self.apu_mut().channel_3_mut().write_nr33(value);
+    }
+
+    fn write_nr34_impl(&mut self, _: Address, value: Register) {
+        self.write_nr34_raw(value);
+        self.apu_mut().channel_3_mut().write_nr34(value);
+    }
+
     fn write_nr50_impl(&mut self, _: Address, value: Register) {
         self.write_nr50_raw(value);
         self.apu_mut().write_nr50(value);
@@ -234,6 +259,13 @@ impl Emulator {
     fn write_nr51_impl(&mut self, _: Address, value: Register) {
         self.write_nr51_raw(value);
         self.apu_mut().write_nr51(value);
+    }
+
+    fn write_wave_ram(&mut self, address: Address, value: Register) {
+        self.write_register_raw(address, value);
+        self.apu_mut()
+            .channel_3_mut()
+            .write_wave_ram(address, value);
     }
 
     fn read_lcd_stat_impl(&self, _: Address) -> Register {
@@ -537,6 +569,11 @@ define_registers!(
     (nr22, 0xFF17, 0x00, 0x00, read_register_raw, write_nr22_impl),
     (nr23, 0xFF18, 0xFF, 0xFF, read_register_raw, write_nr23_impl),
     (nr24, 0xFF19, 0xBF, 0xBF, read_register_raw, write_nr24_impl),
+    (nr30, 0xFF1A, 0x7F, 0x7F, read_register_raw, write_nr30_impl),
+    (nr31, 0xFF1B, 0xFF, 0xFF, read_register_raw, write_nr31_impl),
+    (nr32, 0xFF1C, 0x9F, 0x9F, read_register_raw, write_nr32_impl),
+    (nr33, 0xFF1D, 0xFF, 0xFF, read_register_raw, write_nr33_impl),
+    (nr34, 0xFF1E, 0xBF, 0xBF, read_register_raw, write_nr34_impl),
     (nr50, 0xFF24, 0x77, 0x77, read_register_raw, write_nr50_impl),
     (nr51, 0xFF25, 0xF3, 0xF3, read_register_raw, write_nr51_impl),
     (
@@ -546,6 +583,64 @@ define_registers!(
         0xF1,
         read_register_raw,
         write_register_raw
+    ),
+    (wave0, 0xFF30, 0x00, 0x00, read_register_raw, write_wave_ram),
+    (wave1, 0xFF31, 0xFF, 0xFF, read_register_raw, write_wave_ram),
+    (wave2, 0xFF32, 0x00, 0x00, read_register_raw, write_wave_ram),
+    (wave3, 0xFF33, 0xFF, 0xFF, read_register_raw, write_wave_ram),
+    (wave4, 0xFF34, 0x00, 0x00, read_register_raw, write_wave_ram),
+    (wave5, 0xFF35, 0xFF, 0xFF, read_register_raw, write_wave_ram),
+    (wave6, 0xFF36, 0x00, 0x00, read_register_raw, write_wave_ram),
+    (wave7, 0xFF37, 0xFF, 0xFF, read_register_raw, write_wave_ram),
+    (wave8, 0xFF38, 0x00, 0x00, read_register_raw, write_wave_ram),
+    (wave9, 0xFF39, 0xFF, 0xFF, read_register_raw, write_wave_ram),
+    (
+        wave10,
+        0xFF3A,
+        0x00,
+        0x00,
+        read_register_raw,
+        write_wave_ram
+    ),
+    (
+        wave11,
+        0xFF3B,
+        0xFF,
+        0xFF,
+        read_register_raw,
+        write_wave_ram
+    ),
+    (
+        wave12,
+        0xFF3C,
+        0x00,
+        0x00,
+        read_register_raw,
+        write_wave_ram
+    ),
+    (
+        wave13,
+        0xFF3D,
+        0xFF,
+        0xFF,
+        read_register_raw,
+        write_wave_ram
+    ),
+    (
+        wave14,
+        0xFF3E,
+        0x00,
+        0x00,
+        read_register_raw,
+        write_wave_ram
+    ),
+    (
+        wave15,
+        0xFF3F,
+        0xFF,
+        0xFF,
+        read_register_raw,
+        write_wave_ram
     ),
     (
         lcdc,

@@ -6,7 +6,10 @@ use std::{
 use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::{Deserialize, Serialize};
 
-use crate::emulator::{REFRESH_RATE, Register, TICKS_PER_FRAME};
+use crate::{
+    address_space::{WAVE_RAM_SIZE, WAVE_RAM_START},
+    emulator::{REFRESH_RATE, Register, TICKS_PER_FRAME},
+};
 
 /// Rate to sample audio during playback, in Hz
 const SAMPLE_RATE: u32 = 44100;
@@ -206,6 +209,9 @@ pub struct Apu {
     /// Channel 2: Pulse wave without sweep
     channel_2: PulseChannel,
 
+    /// Channel 3: Custom wave channel
+    channel_3: WaveChannel,
+
     /// The internal DIV-APU counter, incremented at 512 Hz
     div_apu: u8,
 
@@ -230,6 +236,7 @@ impl Apu {
         Self {
             channel_1: PulseChannel::new(/* has_sweep */ true),
             channel_2: PulseChannel::new(/* has_sweep */ false),
+            channel_3: WaveChannel::new(),
             div_apu: 0,
             left_volume: 0,
             right_volume: 0,
@@ -247,6 +254,10 @@ impl Apu {
 
     pub fn channel_2_mut(&mut self) -> &mut PulseChannel {
         &mut self.channel_2
+    }
+
+    pub fn channel_3_mut(&mut self) -> &mut WaveChannel {
+        &mut self.channel_3
     }
 
     pub fn toggle_channel(&mut self, channel: usize) {
@@ -268,6 +279,7 @@ impl Apu {
         if (falling_edges & 0x1) != 0 {
             self.channel_1.advance_length_timer();
             self.channel_2.advance_length_timer();
+            self.channel_3.advance_length_timer();
         }
 
         if (falling_edges & 0x2) != 0 {
@@ -280,9 +292,17 @@ impl Apu {
         }
     }
 
-    pub fn run_m_tick(&mut self) {
-        self.channel_1.run_m_tick();
-        self.channel_2.run_m_tick();
+    pub fn advance_period_timers(&mut self, tick_number: u32) {
+        // Pulse channels advance period every 4 ticks
+        if tick_number % 4 == 0 {
+            self.channel_1.advance_period_timer();
+            self.channel_2.advance_period_timer();
+        }
+
+        // Wave channel advance period every 2 ticks
+        if tick_number % 2 == 0 {
+            self.channel_3.advance_period_timer();
+        }
     }
 
     pub fn write_nr50(&mut self, value: Register) {
@@ -327,7 +347,7 @@ impl Apu {
 
         // Mix in channel 3
         if nr51 & 0x44 != 0 && !self.debug_disable_channel_3 {
-            let sample = self.sample_channel_3_analog();
+            let sample = self.channel_3.sample_analog();
 
             if nr51 & 0x04 != 0 {
                 mixed_right += sample;
@@ -361,10 +381,6 @@ impl Apu {
         (final_left, final_right)
     }
 
-    fn sample_channel_3_analog(&self) -> f32 {
-        0.0
-    }
-
     fn sample_channel_4_analog(&self) -> f32 {
         0.0
     }
@@ -392,7 +408,7 @@ pub struct PulseChannel {
     duty_sample_index: u8,
 
     /// A counter down to 0, at which point the period ends and a sample is taken
-    period_counter: u16,
+    period_timer: u16,
 
     /// Raw value of the full period register (11 bits)
     period_register: u16,
@@ -422,7 +438,7 @@ pub struct PulseChannel {
     volume: u8,
 
     /// Whether the channel is enabled, disabled channels produce silence
-    enabled: bool,
+    is_enabled: bool,
 
     /// Whether this channel has sweep functionality
     has_sweep: bool,
@@ -451,7 +467,7 @@ impl PulseChannel {
         Self {
             duty_cycle: 0,
             duty_sample_index: 0,
-            period_counter: 0,
+            period_timer: 0,
             period_register: 0,
             is_length_timer_enabled: false,
             initial_length_timer: 0,
@@ -461,7 +477,7 @@ impl PulseChannel {
             envelope_sweep_pace: 0,
             envelope_timer: 0,
             volume: 0,
-            enabled: false,
+            is_enabled: false,
             has_sweep,
             is_sweep_enabled: false,
             is_sweep_up: false,
@@ -503,7 +519,7 @@ impl PulseChannel {
 
         // If the envelope's initial volume is 0 and envelope is decreasing, disable the channel
         if self.initial_volume == 0 && !self.is_envelope_up {
-            self.enabled = false;
+            self.is_enabled = false;
         }
     }
 
@@ -531,8 +547,8 @@ impl PulseChannel {
     }
 
     fn trigger(&mut self) {
-        self.enabled = true;
-        self.period_counter = self.initial_period_counter();
+        self.is_enabled = true;
+        self.period_timer = self.initial_period_timer();
         self.volume = self.initial_volume;
 
         if self.length_timer == 0 {
@@ -548,7 +564,7 @@ impl PulseChannel {
         }
     }
 
-    fn initial_period_counter(&self) -> u16 {
+    fn initial_period_timer(&self) -> u16 {
         2048 - self.period_register
     }
 
@@ -560,24 +576,24 @@ impl PulseChannel {
     }
 
     fn sample_analog(&self) -> f32 {
-        if !self.enabled {
+        if !self.is_enabled {
             return 0.0;
         }
 
         digital_to_analog(self.sample_digital())
     }
 
-    fn run_m_tick(&mut self) {
+    fn advance_period_timer(&mut self) {
         // Subtracting would overflow so period is over
-        if self.period_counter == 0 {
+        if self.period_timer == 0 {
             // Advance to next duty sample
             self.duty_sample_index = (self.duty_sample_index + 1) % DUTY_WAVEFORM_LENGTH as u8;
 
-            // Reload period counter
-            self.period_counter = self.initial_period_counter();
+            // Reload period timer
+            self.period_timer = self.initial_period_timer();
         }
 
-        self.period_counter -= 1;
+        self.period_timer -= 1;
     }
 
     fn advance_length_timer(&mut self) {
@@ -585,7 +601,7 @@ impl PulseChannel {
             self.length_timer -= 1;
 
             if self.length_timer == 0 {
-                self.enabled = false;
+                self.is_enabled = false;
             }
         }
     }
@@ -630,7 +646,7 @@ impl PulseChannel {
         if self.sweep_step != 0 {
             let next_sweep_period = self.calculate_next_sweep_period();
             if Self::is_sweep_period_out_of_bounds(next_sweep_period) {
-                self.enabled = false;
+                self.is_enabled = false;
             }
         }
     }
@@ -653,7 +669,7 @@ impl PulseChannel {
 
             // Perform overflow check
             if Self::is_sweep_period_out_of_bounds(new_sweep_period) {
-                self.enabled = false;
+                self.is_enabled = false;
                 return;
             }
 
@@ -664,7 +680,7 @@ impl PulseChannel {
             // Must perform a second overflow check after the adjustment
             let second_sweep_period = self.calculate_next_sweep_period();
             if Self::is_sweep_period_out_of_bounds(second_sweep_period) {
-                self.enabled = false;
+                self.is_enabled = false;
             }
         }
     }
@@ -680,5 +696,157 @@ impl PulseChannel {
 
     fn is_sweep_period_out_of_bounds(period: u16) -> bool {
         period > 0x7FF
+    }
+}
+
+const NUM_CUSTOM_WAVE_SAMPLES: u8 = 32;
+
+#[derive(Serialize, Deserialize)]
+pub struct WaveChannel {
+    /// Whether this channel is enabled, disabled channels produce silence
+    is_enabled: bool,
+
+    /// Volume level (2 bits)
+    volume: u8,
+
+    /// Index into custom waveform [0-32)
+    wave_sample_index: u8,
+
+    /// Custom waveform. 32 4-bit samples stored as 16 bytes, read left to right upper nibble first.
+    wave_ram: [u8; WAVE_RAM_SIZE],
+
+    /// A counter down to 0, at which point the period ends and a sample is taken
+    period_timer: u16,
+
+    /// Raw value of the full period register (11 bits)
+    period_register: u16,
+
+    /// Whether the length timer is enabled
+    is_length_timer_enabled: bool,
+
+    /// A counter down to 0 at which point the channel is disabled
+    length_timer: u16,
+
+    /// Value the length timer is reset to
+    initial_length_timer: u16,
+}
+
+impl WaveChannel {
+    fn new() -> Self {
+        Self {
+            is_enabled: false,
+            volume: 0,
+            wave_sample_index: 0,
+            wave_ram: [0; WAVE_RAM_SIZE],
+            period_timer: 0,
+            period_register: 0,
+            is_length_timer_enabled: false,
+            length_timer: 0,
+            initial_length_timer: 0,
+        }
+    }
+
+    pub fn write_nr30(&mut self, value: Register) {
+        // Highest bit is the channel enable flag
+        self.is_enabled = (value & 0x80) != 0;
+    }
+
+    pub fn write_nr31(&mut self, value: Register) {
+        // All of NR31 is the initial length timer
+        self.initial_length_timer = 256 - value as u16;
+    }
+
+    pub fn write_nr32(&mut self, value: Register) {
+        // Bits 5-6 of NR32 are the volume
+        self.volume = (value & 0x60) >> 5;
+    }
+
+    pub fn write_nr33(&mut self, value: Register) {
+        // All of NR33 is lower bits of period register
+        self.period_register = (self.period_register & 0x0700) | (value as u16);
+    }
+
+    pub fn write_nr34(&mut self, value: Register) {
+        // Lower three bits of NR34 are upper bits of period register
+        self.period_register = (self.period_register & 0x00FF) | (((value as u16) & 0x7) << 8);
+
+        // Bit 6 of NR34
+        self.is_length_timer_enabled = value & 0x40 != 0;
+
+        if self.is_length_timer_enabled {
+            self.length_timer = self.initial_length_timer;
+        }
+
+        // Bit 7 of NR34
+        let is_triggered = value & 0x80 != 0;
+        if is_triggered {
+            self.trigger();
+        }
+    }
+
+    pub fn write_wave_ram(&mut self, address: u16, value: u8) {
+        self.wave_ram[(address - WAVE_RAM_START) as usize] = value;
+    }
+
+    fn sample_digital(&self) -> u8 {
+        let wave_ram_byte = self.wave_ram[(self.wave_sample_index as usize) / 8];
+
+        // High nibble contains sample before low nibble
+        let wave_sample = if self.wave_sample_index % 2 == 0 {
+            (wave_ram_byte & 0xF0) >> 4
+        } else {
+            wave_ram_byte & 0x0F
+        };
+
+        // Apply volume adjustment by shifting digital sample
+        if self.volume == 0 {
+            0
+        } else {
+            wave_sample >> (self.volume - 1)
+        }
+    }
+
+    fn sample_analog(&self) -> f32 {
+        if !self.is_enabled {
+            return 0.0;
+        }
+
+        digital_to_analog(self.sample_digital())
+    }
+
+    fn trigger(&mut self) {
+        self.is_enabled = true;
+        self.period_timer = self.initial_period_timer();
+
+        if self.length_timer == 0 {
+            self.length_timer = self.initial_length_timer;
+        }
+    }
+
+    fn initial_period_timer(&self) -> u16 {
+        2048 - self.period_register
+    }
+
+    fn advance_period_timer(&mut self) {
+        // Subtracting would overflow so period is over
+        if self.period_timer == 0 {
+            // Advance to next sample within wave
+            self.wave_sample_index = (self.wave_sample_index + 1) % NUM_CUSTOM_WAVE_SAMPLES;
+
+            // Reload period timer
+            self.period_timer = self.initial_period_timer();
+        }
+
+        self.period_timer -= 1;
+    }
+
+    fn advance_length_timer(&mut self) {
+        if self.is_length_timer_enabled && self.length_timer > 0 {
+            self.length_timer -= 1;
+
+            if self.length_timer == 0 {
+                self.is_enabled = false;
+            }
+        }
     }
 }

@@ -53,3 +53,8 @@ pub const HRAM_SIZE: usize = (HRAM_END - HRAM_START) as usize;
 
 /// Interrupt Enable Register 0xFFFF
 pub const IE_ADDRESS: Address = 0xFFFF;
+
+/// Wave RAM start address
+pub const WAVE_RAM_START: Address = 0xFF30;
+pub const WAVE_RAM_END: Address = 0xFF40;
+pub const WAVE_RAM_SIZE: usize = (WAVE_RAM_END - WAVE_RAM_START) as usize;
