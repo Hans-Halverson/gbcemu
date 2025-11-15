@@ -181,6 +181,11 @@ impl Emulator {
         self.write_if_reg_raw(0xE0 | (0x1F & value));
     }
 
+    fn write_nr10_impl(&mut self, _: Address, value: Register) {
+        self.write_nr10_raw(value);
+        self.apu_mut().channel_1_mut().write_nrx0(value);
+    }
+
     fn write_nr11_impl(&mut self, _: Address, value: Register) {
         self.write_nr11_raw(value);
         self.apu_mut().channel_1_mut().write_nrx1(value);
@@ -523,14 +528,7 @@ define_registers!(
     ),
     (tac, 0xFF07, 0xF8, 0xF8, read_tac_impl, write_tac_impl),
     (if_reg, 0xFF0F, 0xE1, 0xE1, read_register_raw, write_if_impl),
-    (
-        nr10,
-        0xFF10,
-        0x80,
-        0x80,
-        read_register_raw,
-        write_register_raw
-    ),
+    (nr10, 0xFF10, 0x80, 0x80, read_register_raw, write_nr10_impl),
     (nr11, 0xFF11, 0xBF, 0xBF, read_register_raw, write_nr11_impl),
     (nr12, 0xFF12, 0xF3, 0xF3, read_register_raw, write_nr12_impl),
     (nr13, 0xFF13, 0xFF, 0xFF, read_register_raw, write_nr13_impl),

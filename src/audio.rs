@@ -200,8 +200,13 @@ fn digital_to_analog(digit: u8) -> f32 {
 /// Audio processing unit
 #[derive(Serialize, Deserialize)]
 pub struct Apu {
+    /// Channel 1: Pulse wave with sweep
     channel_1: PulseChannel,
+
+    /// Channel 2: Pulse wave without sweep
     channel_2: PulseChannel,
+
+    /// The internal DIV-APU counter, incremented at 512 Hz
     div_apu: u8,
 
     /// Volume for left output channel. Part of NR51 register.
@@ -223,8 +228,8 @@ pub struct Apu {
 impl Apu {
     pub fn new() -> Self {
         Self {
-            channel_1: PulseChannel::new(),
-            channel_2: PulseChannel::new(),
+            channel_1: PulseChannel::new(/* has_sweep */ true),
+            channel_2: PulseChannel::new(/* has_sweep */ false),
             div_apu: 0,
             left_volume: 0,
             right_volume: 0,
@@ -261,7 +266,12 @@ impl Apu {
         let falling_edges = old_div_apu & !self.div_apu;
 
         if (falling_edges & 0x1) != 0 {
-            self.advance_length_timers();
+            self.channel_1.advance_length_timer();
+            self.channel_2.advance_length_timer();
+        }
+
+        if (falling_edges & 0x2) != 0 {
+            self.channel_1.advance_sweep_timer();
         }
 
         if (falling_edges & 0x4) != 0 {
@@ -273,11 +283,6 @@ impl Apu {
     pub fn run_m_tick(&mut self) {
         self.channel_1.run_m_tick();
         self.channel_2.run_m_tick();
-    }
-
-    pub fn advance_length_timers(&mut self) {
-        self.channel_1.advance_length_timer();
-        self.channel_2.advance_length_timer();
     }
 
     pub fn write_nr50(&mut self, value: Register) {
@@ -418,10 +423,31 @@ pub struct PulseChannel {
 
     /// Whether the channel is enabled, disabled channels produce silence
     enabled: bool,
+
+    /// Whether this channel has sweep functionality
+    has_sweep: bool,
+
+    /// Whether the sweep is currently enabled
+    is_sweep_enabled: bool,
+
+    /// Whether the sweep is increasing or decreasing the period
+    is_sweep_up: bool,
+
+    /// Sweep step used when adjusting the period, 3 bits
+    sweep_step: u8,
+
+    /// Pace of the sweep, 3 bits
+    sweep_pace: u8,
+
+    /// A counter down to 0, at which point the period is adjusted by the sweep
+    sweep_timer: u8,
+
+    /// Shadow copy of the period register used for sweep calculations
+    shadow_period_register: u16,
 }
 
 impl PulseChannel {
-    fn new() -> Self {
+    fn new(has_sweep: bool) -> Self {
         Self {
             duty_cycle: 0,
             duty_sample_index: 0,
@@ -436,7 +462,25 @@ impl PulseChannel {
             envelope_timer: 0,
             volume: 0,
             enabled: false,
+            has_sweep,
+            is_sweep_enabled: false,
+            is_sweep_up: false,
+            sweep_step: 0,
+            sweep_pace: 0,
+            sweep_timer: 0,
+            shadow_period_register: 0,
         }
+    }
+
+    pub fn write_nrx0(&mut self, value: Register) {
+        // Lower three bits are the sweep step
+        self.sweep_step = value & 0x07;
+
+        // Third bit marks the sweep the dirction
+        self.is_sweep_up = (value & 0x08) == 0;
+
+        // Bits 4-6 are the sweep pace
+        self.sweep_pace = (value & 0x70) >> 4;
     }
 
     pub fn write_nrx1(&mut self, value: Register) {
@@ -497,6 +541,10 @@ impl PulseChannel {
 
         if self.envelope_sweep_pace != 0 {
             self.envelope_timer = self.envelope_sweep_pace;
+        }
+
+        if self.has_sweep {
+            self.trigger_sweep_timer();
         }
     }
 
@@ -562,5 +610,75 @@ impl PulseChannel {
                 self.volume -= 1;
             }
         }
+    }
+
+    fn initial_sweep_timer(&self) -> u8 {
+        // Pace of 0 is treated as 8
+        if self.sweep_pace == 0 {
+            8
+        } else {
+            self.sweep_pace
+        }
+    }
+
+    fn trigger_sweep_timer(&mut self) {
+        self.sweep_timer = self.initial_sweep_timer();
+        self.shadow_period_register = self.period_register;
+        self.is_sweep_enabled = self.sweep_pace != 0 || self.sweep_step != 0;
+
+        // Overflow check is performed but only when sweep step is non-zero
+        if self.sweep_step != 0 {
+            let next_sweep_period = self.calculate_next_sweep_period();
+            if Self::is_sweep_period_out_of_bounds(next_sweep_period) {
+                self.enabled = false;
+            }
+        }
+    }
+
+    fn advance_sweep_timer(&mut self) {
+        if !self.has_sweep || !self.is_sweep_enabled || self.sweep_pace == 0 {
+            return;
+        }
+
+        if self.sweep_timer > 0 {
+            self.sweep_timer -= 1;
+        }
+
+        if self.sweep_timer == 0 {
+            // Reset sweep timer
+            self.sweep_timer = self.initial_sweep_timer();
+
+            // Calculate new period and perform overflow check
+            let new_sweep_period = self.calculate_next_sweep_period();
+
+            // Perform overflow check
+            if Self::is_sweep_period_out_of_bounds(new_sweep_period) {
+                self.enabled = false;
+                return;
+            }
+
+            // Update period registers if no overflow
+            self.shadow_period_register = new_sweep_period;
+            self.period_register = new_sweep_period;
+
+            // Must perform a second overflow check after the adjustment
+            let second_sweep_period = self.calculate_next_sweep_period();
+            if Self::is_sweep_period_out_of_bounds(second_sweep_period) {
+                self.enabled = false;
+            }
+        }
+    }
+
+    fn calculate_next_sweep_period(&self) -> u16 {
+        let sweep_adjustment = self.shadow_period_register >> self.sweep_step;
+        if self.is_sweep_up {
+            self.shadow_period_register + sweep_adjustment
+        } else {
+            self.shadow_period_register - sweep_adjustment
+        }
+    }
+
+    fn is_sweep_period_out_of_bounds(period: u16) -> bool {
+        period > 0x7FF
     }
 }
