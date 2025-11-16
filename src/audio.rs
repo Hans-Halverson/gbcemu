@@ -728,7 +728,11 @@ impl PulseChannel {
     }
 
     fn trigger(&mut self) {
-        self.is_enabled = true;
+        // Channel can only be enabled if DAC is enabled
+        if self.is_dac_enabled {
+            self.is_enabled = true;
+        }
+
         self.period_timer = self.initial_period_timer();
         self.volume = self.initial_volume;
 
@@ -1011,7 +1015,11 @@ impl WaveChannel {
     }
 
     fn trigger(&mut self) {
-        self.is_enabled = true;
+        // Channel can only be enabled if DAC is enabled
+        if self.is_dac_enabled {
+            self.is_enabled = true;
+        }
+
         self.period_timer = self.initial_period_timer();
         self.wave_sample_index = 0;
 
@@ -1170,7 +1178,11 @@ impl NoiseChannel {
     }
 
     fn trigger(&mut self) {
-        self.is_enabled = true;
+        // Channel can only be enabled if DAC is enabled
+        if self.is_dac_enabled {
+            self.is_enabled = true;
+        }
+
         self.clock_timer = self.initial_clock_timer();
         self.volume = self.initial_volume;
         self.lfsr = 0;
