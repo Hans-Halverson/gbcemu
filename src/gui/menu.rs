@@ -12,6 +12,7 @@ use crate::{
 };
 
 const QUIT_ITEM_ID: &str = "quit";
+const PAUSE_ITEM_ID: &str = "pause";
 const SAVE_ITEM_ID: &str = "save";
 const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
 const QUICK_SAVE_ITEM_ID_PREFIX: &str = "quick_save_";
@@ -30,6 +31,7 @@ impl EmulatorShellApp {
                 QUIT_ITEM_ID => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
+                PAUSE_ITEM_ID => self.send_command(Command::TogglePause),
                 SAVE_ITEM_ID => self.send_command(Command::Save),
                 MUTE_ITEM_ID => self.send_command(Command::ToggleMute),
                 VOLUME_UP_ITEM_ID => self.send_command(Command::VolumeUp),
@@ -108,6 +110,14 @@ fn emulator_menu() -> Submenu {
         "Emulator",
         true,
         &[
+            &CheckMenuItem::with_id(
+                PAUSE_ITEM_ID,
+                "Pause",
+                true,
+                false,
+                Some(Accelerator::new(Some(Modifiers::META), Code::KeyP)),
+            ),
+            &PredefinedMenuItem::separator(),
             &MenuItem::with_id(
                 SAVE_ITEM_ID,
                 "Save",

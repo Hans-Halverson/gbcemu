@@ -27,39 +27,44 @@ const HPF_RECHARGE_RATE: f32 = 0.996;
 /// A generic audio output device which can be attached to an emulator
 pub trait AudioOutput {
     fn send_frame(&self, samples: VecDeque<TimedSample>);
+    fn set_paused_state(&self, is_paused: bool);
+}
+
+enum AudioMessage {
+    /// The next audio frame
+    FrameSamples(VecDeque<TimedSample>),
+    /// Whether audio should be paused
+    PausedState(bool),
 }
 
 fn shared_audio_channel() -> (SharedAudioSender, SharedAudioReceiver) {
     let (send, recv) = mpsc::channel();
-    (
-        SharedAudioSender {
-            next_frame_send: send,
-        },
-        SharedAudioReceiver {
-            next_frame_recv: recv,
-        },
-    )
+    (SharedAudioSender { send }, SharedAudioReceiver { recv })
 }
 
 pub struct SharedAudioSender {
-    /// Batch of samples for the next frame
-    next_frame_send: Sender<VecDeque<TimedSample>>,
+    send: Sender<AudioMessage>,
 }
 
 impl SharedAudioSender {
     fn send_frame(&self, samples: VecDeque<TimedSample>) {
-        self.next_frame_send.send(samples).unwrap();
+        self.send.send(AudioMessage::FrameSamples(samples)).unwrap();
+    }
+
+    fn set_paused_state(&self, is_paused: bool) {
+        self.send
+            .send(AudioMessage::PausedState(is_paused))
+            .unwrap();
     }
 }
 
 pub struct SharedAudioReceiver {
-    /// Batch of samples available for the next frame
-    next_frame_recv: Receiver<VecDeque<TimedSample>>,
+    recv: Receiver<AudioMessage>,
 }
 
 impl SharedAudioReceiver {
-    fn try_next_frame(&self) -> Option<VecDeque<TimedSample>> {
-        self.next_frame_recv.try_recv().ok()
+    fn try_next_message(&self) -> Option<AudioMessage> {
+        self.recv.try_recv().ok()
     }
 }
 
@@ -87,11 +92,17 @@ struct BufferedSource {
     /// Samples for the current frame
     current_frame_samples: VecDeque<TimedSample>,
 
+    /// Queue of pending frames
+    pending_frames: VecDeque<VecDeque<TimedSample>>,
+
     /// Index of the next sample to read
     next_sample_index: usize,
 
     /// Receiver for batches of samples for each frame
     receiver: SharedAudioReceiver,
+
+    /// Whether the audio stream is currently paused
+    is_paused: bool,
 }
 
 impl BufferedSource {
@@ -105,8 +116,21 @@ impl BufferedSource {
                 tick: 0,
             },
             current_frame_samples: VecDeque::new(),
+            pending_frames: VecDeque::new(),
             next_sample_index: 0,
             receiver,
+            is_paused: false,
+        }
+    }
+
+    fn handle_messages(&mut self) {
+        while let Some(message) = self.receiver.try_next_message() {
+            match message {
+                AudioMessage::FrameSamples(frame_samples) => {
+                    self.pending_frames.push_back(frame_samples)
+                }
+                AudioMessage::PausedState(is_paused) => self.is_paused = is_paused,
+            }
         }
     }
 }
@@ -133,6 +157,13 @@ impl Iterator for BufferedSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.handle_messages();
+
+        // Silence when paused
+        if self.is_paused {
+            return Some(0.0);
+        }
+
         // First check if we should skip to the next frame. Make sure not to skip if between left
         // and right samples.
         if self.is_next_sample_left && self.current_tick >= (TICKS_PER_FRAME as f64 - 0.1) {
@@ -141,7 +172,7 @@ impl Iterator for BufferedSource {
 
             // Collect all pending frames to be combined into a single frame
             let mut next_frames = vec![];
-            while let Some(frame_samples) = self.receiver.try_next_frame() {
+            while let Some(frame_samples) = self.pending_frames.pop_front() {
                 next_frames.push(frame_samples);
             }
 
@@ -165,9 +196,10 @@ impl Iterator for BufferedSource {
                     // Choose samples evenly from each frame to fill the new frame
                     for i in 0..frame_length {
                         let frame_index = i / samples_per_frame;
+                        let frame = &next_frames[frame_index];
                         let sample_index =
-                            ((i % samples_per_frame) * num_frames).min(frame_length - 1);
-                        new_frame.push_back(next_frames[frame_index][sample_index]);
+                            ((i % samples_per_frame) * num_frames).min(frame.len() - 1);
+                        new_frame.push_back(frame[sample_index]);
                     }
 
                     self.current_frame_samples = new_frame;
@@ -226,6 +258,10 @@ impl DefaultSystemAudioOutput {
 impl AudioOutput for DefaultSystemAudioOutput {
     fn send_frame(&self, samples: VecDeque<TimedSample>) {
         self.sender.send_frame(samples);
+    }
+
+    fn set_paused_state(&self, is_paused: bool) {
+        self.sender.set_paused_state(is_paused);
     }
 }
 

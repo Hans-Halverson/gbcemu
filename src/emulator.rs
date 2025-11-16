@@ -100,6 +100,8 @@ pub struct SharedInputAdapter {
 pub enum Command {
     /// Send a new set of pressed buttons encoded as a byte
     UpdatePressedButtons(u8),
+    /// Toggle paused state of the emulator
+    TogglePause,
     /// Save the entire emulator state to disk
     Save,
     /// Save emulator state into the given quick save slot
@@ -439,6 +441,10 @@ pub struct Emulator {
     /// Whether the emulator is currently in double speed mode
     is_double_speed: bool,
 
+    /// Whether the emulator is currently paused
+    #[serde(skip)]
+    is_paused: bool,
+
     /// Queue of audio samples built in the current frame
     audio_sample_queue: VecDeque<TimedSample>,
 }
@@ -553,6 +559,7 @@ impl Emulator {
             in_turbo_mode: false,
             is_booting: true,
             is_double_speed: false,
+            is_paused: false,
             audio_sample_queue: VecDeque::new(),
         }
     }
@@ -775,11 +782,7 @@ impl Emulator {
             self.run_frame();
 
             // Push a single audio frame to the audio output, if any
-            if let Some(audio_output) = &mut self.audio_output {
-                let mut audio_frame = VecDeque::new();
-                mem::swap(&mut audio_frame, &mut self.audio_sample_queue);
-                audio_output.send_frame(audio_frame);
-            }
+            self.flush_audio_frame();
 
             // Increment frame number (backed by microframes)
             self.microframe += self.microframes_per_frame();
@@ -851,7 +854,7 @@ impl Emulator {
     fn run_scanline(&mut self, scanline: u8) {
         self.scanline = scanline;
 
-        // Resust interrupt for LYC=LY if necessary
+        // Request interrupt for LYC=LY if necessary
         if self.is_stat_lyc_interrupt_enabled() && (self.scanline == self.lyc()) {
             self.request_interrupt(Interrupt::LcdStat);
         }
@@ -939,7 +942,7 @@ impl Emulator {
     }
 
     fn run_tick(&mut self) {
-        self.handle_inputs();
+        self.handle_commands();
         self.increment_timers();
 
         let old_tick_number = self.tick;
@@ -989,7 +992,7 @@ impl Emulator {
         self.advance_speed_switch_state();
     }
 
-    fn handle_inputs(&mut self) {
+    fn handle_commands(&mut self) {
         if self.input_adapter.is_none() {
             return;
         }
@@ -999,6 +1002,7 @@ impl Emulator {
                 Command::UpdatePressedButtons(new_pressed_buttons) => {
                     self.handle_update_pressed_buttons(new_pressed_buttons)
                 }
+                Command::TogglePause => self.toggle_paused(),
                 Command::Save => self.save_cartridge_state_to_disk(),
                 Command::QuickSave(slot) => self.quick_save(slot),
                 Command::LoadQuickSave(slot) => self.load_quick_save(slot),
@@ -1009,6 +1013,19 @@ impl Emulator {
                 Command::ToggleAudioChannel(channel) => self.apu_mut().toggle_channel(channel),
                 Command::ToggleHpf => self.apu_mut().toggle_hpf(),
             }
+        }
+    }
+
+    fn toggle_paused(&mut self) {
+        self.is_paused = !self.is_paused;
+
+        // Notify audio output of paused state
+        if let Some(audio_output) = self.audio_output.as_ref() {
+            audio_output.set_paused_state(self.is_paused);
+        }
+
+        while self.is_paused {
+            self.handle_commands();
         }
     }
 
@@ -1616,6 +1633,15 @@ impl Emulator {
             right,
             tick: self.tick,
         });
+    }
+
+    /// Flush the current audio frame queue to the audio output, if any
+    fn flush_audio_frame(&mut self) {
+        if let Some(audio_output) = &mut self.audio_output {
+            let mut audio_frame = VecDeque::new();
+            mem::swap(&mut audio_frame, &mut self.audio_sample_queue);
+            audio_output.send_frame(audio_frame);
+        }
     }
 }
 
