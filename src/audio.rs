@@ -592,9 +592,6 @@ pub struct PulseChannel {
     /// Whether the length timer is enabled
     is_length_timer_enabled: bool,
 
-    /// Value the length timer is reset to
-    initial_length_timer: u8,
-
     /// A counter down to 0 at which point the channel is disabled
     length_timer: u8,
 
@@ -649,7 +646,6 @@ impl PulseChannel {
             period_timer: 0,
             period_register: 0,
             is_length_timer_enabled: false,
-            initial_length_timer: 0,
             length_timer: 0,
             initial_volume: 0,
             is_envelope_up: false,
@@ -668,11 +664,13 @@ impl PulseChannel {
         }
     }
 
+    const MAX_LENGTH_TIMER: u8 = 64;
+
     pub fn write_nrx0(&mut self, value: Register) {
         // Lower three bits are the sweep step
         self.sweep_step = value & 0x07;
 
-        // Third bit marks the sweep the dirction
+        // Third bit marks the sweep the direction
         self.is_sweep_up = (value & 0x08) == 0;
 
         // Bits 4-6 are the sweep pace
@@ -684,7 +682,7 @@ impl PulseChannel {
         self.duty_cycle = (value & 0xC0) >> 6;
 
         // Lower six bits of NRX1
-        self.initial_length_timer = 64 - (value & 0x3F);
+        self.length_timer = Self::MAX_LENGTH_TIMER - (value & 0x3F);
     }
 
     pub fn write_nrx2(&mut self, value: Register) {
@@ -716,10 +714,6 @@ impl PulseChannel {
         // Bit 6 of NRX4
         self.is_length_timer_enabled = value & 0x40 != 0;
 
-        if self.is_length_timer_enabled {
-            self.length_timer = self.initial_length_timer;
-        }
-
         // Bit 7 of NRX4
         let is_triggered = value & 0x80 != 0;
         if is_triggered {
@@ -737,7 +731,7 @@ impl PulseChannel {
         self.volume = self.initial_volume;
 
         if self.length_timer == 0 {
-            self.length_timer = self.initial_length_timer;
+            self.length_timer = Self::MAX_LENGTH_TIMER;
         }
 
         if self.envelope_sweep_pace != 0 {
@@ -918,9 +912,6 @@ pub struct WaveChannel {
 
     /// A counter down to 0 at which point the channel is disabled
     length_timer: u16,
-
-    /// Value the length timer is reset to
-    initial_length_timer: u16,
 }
 
 impl WaveChannel {
@@ -935,9 +926,10 @@ impl WaveChannel {
             period_register: 0,
             is_length_timer_enabled: false,
             length_timer: 0,
-            initial_length_timer: 0,
         }
     }
+
+    const MAX_LENGTH_TIMER: u16 = 256;
 
     pub fn write_nr30(&mut self, value: Register) {
         // Highest bit is the channel enable flag
@@ -949,7 +941,7 @@ impl WaveChannel {
 
     pub fn write_nr31(&mut self, value: Register) {
         // All of NR31 is the initial length timer
-        self.initial_length_timer = 256 - value as u16;
+        self.length_timer = Self::MAX_LENGTH_TIMER - value as u16;
     }
 
     pub fn write_nr32(&mut self, value: Register) {
@@ -968,10 +960,6 @@ impl WaveChannel {
 
         // Bit 6 of NR34
         self.is_length_timer_enabled = value & 0x40 != 0;
-
-        if self.is_length_timer_enabled {
-            self.length_timer = self.initial_length_timer;
-        }
 
         // Bit 7 of NR34
         let is_triggered = value & 0x80 != 0;
@@ -1024,7 +1012,7 @@ impl WaveChannel {
         self.wave_sample_index = 0;
 
         if self.length_timer == 0 {
-            self.length_timer = self.initial_length_timer;
+            self.length_timer = Self::MAX_LENGTH_TIMER;
         }
     }
 
@@ -1085,9 +1073,6 @@ pub struct NoiseChannel {
     /// Whether the length timer is enabled
     is_length_timer_enabled: bool,
 
-    /// Value the length timer is reset to
-    initial_length_timer: u8,
-
     /// A counter down to 0 at which point the channel is disabled
     length_timer: u8,
 
@@ -1119,7 +1104,6 @@ impl NoiseChannel {
             clock_divider: 0,
             clock_timer: 0,
             is_length_timer_enabled: false,
-            initial_length_timer: 0,
             length_timer: 0,
             is_envelope_up: false,
             envelope_sweep_pace: 0,
@@ -1129,9 +1113,11 @@ impl NoiseChannel {
         }
     }
 
+    const MAX_LENGTH_TIMER: u8 = 64;
+
     pub fn write_nr41(&mut self, value: Register) {
         // Lower six bits of NR41
-        self.initial_length_timer = 64 - (value & 0x3F);
+        self.length_timer = Self::MAX_LENGTH_TIMER - (value & 0x3F);
     }
 
     pub fn write_nr42(&mut self, value: Register) {
@@ -1166,10 +1152,6 @@ impl NoiseChannel {
         // Bit 6 of NR44
         self.is_length_timer_enabled = value & 0x40 != 0;
 
-        if self.is_length_timer_enabled {
-            self.length_timer = self.initial_length_timer;
-        }
-
         // Bit 7 of NR44
         let is_triggered = value & 0x80 != 0;
         if is_triggered {
@@ -1188,7 +1170,7 @@ impl NoiseChannel {
         self.lfsr = 0;
 
         if self.length_timer == 0 {
-            self.length_timer = self.initial_length_timer;
+            self.length_timer = Self::MAX_LENGTH_TIMER;
         }
 
         if self.envelope_sweep_pace != 0 {
