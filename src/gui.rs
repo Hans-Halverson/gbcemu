@@ -70,6 +70,7 @@ impl GuiApp {
                 MUTE_ITEM_ID => self.commands_tx.send(Command::ToggleMute).unwrap(),
                 VOLUME_UP_ITEM_ID => self.commands_tx.send(Command::VolumeUp).unwrap(),
                 VOLUME_DOWN_ITEM_ID => self.commands_tx.send(Command::VolumeDown).unwrap(),
+                TOGGLE_HPF_ITEM_ID => self.commands_tx.send(Command::ToggleHpf).unwrap(),
                 RESIZE_TO_FIT_ITEM_ID => self.resize_to_fit(ctx),
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
@@ -204,6 +205,7 @@ const LOAD_QUICK_SAVE_ITEM_ID_PREFIX: &str = "load_quick_save_";
 const MUTE_ITEM_ID: &str = "mute";
 const VOLUME_UP_ITEM_ID: &str = "volume_up";
 const VOLUME_DOWN_ITEM_ID: &str = "volume_down";
+const TOGGLE_HPF_ITEM_ID: &str = "toggle_hpf";
 const TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX: &str = "toggle_audio_channel_";
 
 fn create_app_menu() -> Menu {
@@ -266,11 +268,11 @@ fn create_app_menu() -> Menu {
     )
     .unwrap();
 
-    let channels_submenu = Submenu::new("Channels", true);
+    let audio_debug_submenu = Submenu::new("Debug", true);
 
     for i in 0..NUM_AUDIO_CHANNELS {
         let channel = i + 1;
-        channels_submenu
+        audio_debug_submenu
             .append(&CheckMenuItem::with_id(
                 format!("{TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX}{channel}"),
                 format!("Channel {channel}"),
@@ -283,6 +285,20 @@ fn create_app_menu() -> Menu {
             ))
             .unwrap();
     }
+
+    audio_debug_submenu
+        .append(&PredefinedMenuItem::separator())
+        .unwrap();
+
+    audio_debug_submenu
+        .append(&CheckMenuItem::with_id(
+            TOGGLE_HPF_ITEM_ID,
+            "High-Pass Filter",
+            true,
+            true,
+            None,
+        ))
+        .unwrap();
 
     let audio_menu = Submenu::with_items(
         "Audio",
@@ -308,7 +324,7 @@ fn create_app_menu() -> Menu {
                 Some(Accelerator::new(Some(Modifiers::META), Code::Minus)),
             ),
             &PredefinedMenuItem::separator(),
-            &channels_submenu,
+            &audio_debug_submenu,
         ],
     )
     .unwrap();

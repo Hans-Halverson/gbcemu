@@ -21,6 +21,9 @@ pub const TICKS_PER_SAMPLE: f64 = (TICKS_PER_FRAME as f64 * REFRESH_RATE) / (SAM
 const SYSTEM_VOLUME_LEVELS: [f32; 8] = [0.0, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.65, 1.0];
 const DEFAULT_SYSTEM_VOLUME_INDEX: usize = 5;
 
+/// Recharge rate for the high pass filter's capacitor when sampling at 44100 Hz
+const HPF_RECHARGE_RATE: f32 = 0.996;
+
 /// A generic audio output device which can be attached to an emulator
 pub trait AudioOutput {
     fn send_frame(&self, samples: VecDeque<TimedSample>);
@@ -231,6 +234,25 @@ fn digital_to_analog(digit: u8) -> f32 {
     1.0 - ((digit as f32) / 7.5)
 }
 
+#[derive(Serialize, Deserialize)]
+struct HighPassFilter {
+    /// Charge of the capacitor
+    charge: f32,
+}
+
+impl HighPassFilter {
+    fn new() -> Self {
+        Self { charge: 0.0 }
+    }
+
+    fn apply(&mut self, input_sample: f32) -> f32 {
+        let output_sample = input_sample - self.charge;
+        self.charge = input_sample - output_sample * HPF_RECHARGE_RATE;
+
+        output_sample
+    }
+}
+
 /// Audio processing unit
 #[derive(Serialize, Deserialize)]
 pub struct Apu {
@@ -258,6 +280,12 @@ pub struct Apu {
     /// Full NR51 register value. Each bit controls whether left/right output uses each channel.
     nr51: Register,
 
+    /// Capacitor used in the left channel's high-pass filter
+    hpf_left: HighPassFilter,
+
+    /// Capacitor used in the right channel's high-pass filter
+    hpf_right: HighPassFilter,
+
     /// Volume for the entire system output. Is an index into the fixed SYSTEM_VOLUME_LEVELS array.
     ///
     /// Corresponds to volume knob on original hardware.
@@ -271,6 +299,9 @@ pub struct Apu {
     debug_disable_channel_2: bool,
     debug_disable_channel_3: bool,
     debug_disable_channel_4: bool,
+
+    /// Debug flag to disable the high-pass filter
+    debug_disable_hpf: bool,
 }
 
 impl Apu {
@@ -284,12 +315,15 @@ impl Apu {
             left_volume: 0,
             right_volume: 0,
             nr51: 0,
+            hpf_left: HighPassFilter::new(),
+            hpf_right: HighPassFilter::new(),
             system_volume_index: DEFAULT_SYSTEM_VOLUME_INDEX,
             is_muted: false,
             debug_disable_channel_1: false,
             debug_disable_channel_2: false,
             debug_disable_channel_3: false,
             debug_disable_channel_4: false,
+            debug_disable_hpf: false,
         }
     }
 
@@ -330,6 +364,10 @@ impl Apu {
             4 => self.debug_disable_channel_4 = !self.debug_disable_channel_4,
             _ => {}
         }
+    }
+
+    pub fn toggle_hpf(&mut self) {
+        self.debug_disable_hpf = !self.debug_disable_hpf;
     }
 
     pub fn advance_div_apu(&mut self) {
@@ -456,6 +494,17 @@ impl Apu {
             mixed_right * system_volume * Self::channel_volume_analog(self.right_volume);
 
         (final_left, final_right)
+    }
+
+    pub fn apply_hpf(&mut self, left_sample: f32, right_sample: f32) -> (f32, f32) {
+        if self.debug_disable_hpf {
+            return (left_sample, right_sample);
+        }
+
+        let filtered_left = self.hpf_left.apply(left_sample);
+        let filtered_right = self.hpf_right.apply(right_sample);
+
+        (filtered_left, filtered_right)
     }
 
     /// Channel volume 0 maps to volume 1, 7 maps to volume 8

@@ -116,6 +116,8 @@ pub enum Command {
     ToggleMute,
     /// Toggle the given audio channel on or off
     ToggleAudioChannel(usize),
+    /// Toggle the high pass filter on or off
+    ToggleHpf,
 }
 
 impl SharedInputAdapter {
@@ -1005,6 +1007,7 @@ impl Emulator {
                 Command::VolumeDown => self.apu_mut().decrease_system_volume(),
                 Command::ToggleMute => self.apu_mut().toggle_muted(),
                 Command::ToggleAudioChannel(channel) => self.apu_mut().toggle_channel(channel),
+                Command::ToggleHpf => self.apu_mut().toggle_hpf(),
             }
         }
     }
@@ -1606,6 +1609,8 @@ impl Emulator {
     /// Sample the current audio channels and push to current frame's sample queue
     fn push_next_sample(&mut self) {
         let (left, right) = self.apu().sample_audio();
+        let (left, right) = self.apu_mut().apply_hpf(left, right);
+
         self.audio_sample_queue.push_back(TimedSample {
             left,
             right,
