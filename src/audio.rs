@@ -567,6 +567,9 @@ pub struct PulseChannel {
     /// Whether the channel is enabled, disabled channels produce silence
     is_enabled: bool,
 
+    /// Whether the DAC is enabled
+    is_dac_enabled: bool,
+
     /// Whether this channel has sweep functionality
     has_sweep: bool,
 
@@ -605,6 +608,7 @@ impl PulseChannel {
             envelope_timer: 0,
             volume: 0,
             is_enabled: false,
+            is_dac_enabled: false,
             has_sweep,
             is_sweep_enabled: false,
             is_sweep_up: false,
@@ -645,7 +649,8 @@ impl PulseChannel {
         self.envelope_sweep_pace = value & 0x07;
 
         // If the envelope's initial volume is 0 and envelope is decreasing, disable the channel
-        if self.initial_volume == 0 && !self.is_envelope_up {
+        self.is_dac_enabled = (self.initial_volume != 0) || self.is_envelope_up;
+        if !self.is_dac_enabled {
             self.is_enabled = false;
         }
     }
@@ -696,6 +701,10 @@ impl PulseChannel {
     }
 
     fn sample_digital(&self) -> u8 {
+        if !self.is_enabled {
+            return 0;
+        }
+
         let duty_waveform = DUTY_CYCLE_WAVEFORMS[self.duty_cycle as usize];
         let duty_waveform_sample = duty_waveform[self.duty_sample_index as usize];
 
@@ -703,7 +712,7 @@ impl PulseChannel {
     }
 
     fn sample_analog(&self) -> f32 {
-        if !self.is_enabled {
+        if !self.is_dac_enabled {
             return 0.0;
         }
 
@@ -833,6 +842,9 @@ pub struct WaveChannel {
     /// Whether this channel is enabled, disabled channels produce silence
     is_enabled: bool,
 
+    /// Whether the DAC is enabled
+    is_dac_enabled: bool,
+
     /// Volume level (2 bits)
     volume: u8,
 
@@ -862,6 +874,7 @@ impl WaveChannel {
     fn new() -> Self {
         Self {
             is_enabled: false,
+            is_dac_enabled: false,
             volume: 0,
             wave_sample_index: 0,
             wave_ram: [0; WAVE_RAM_SIZE],
@@ -875,7 +888,10 @@ impl WaveChannel {
 
     pub fn write_nr30(&mut self, value: Register) {
         // Highest bit is the channel enable flag
-        self.is_enabled = (value & 0x80) != 0;
+        self.is_dac_enabled = (value & 0x80) != 0;
+        if !self.is_dac_enabled {
+            self.is_enabled = false;
+        }
     }
 
     pub fn write_nr31(&mut self, value: Register) {
@@ -916,6 +932,10 @@ impl WaveChannel {
     }
 
     fn sample_digital(&self) -> u8 {
+        if !self.is_enabled {
+            return 0;
+        }
+
         let wave_ram_byte = self.wave_ram[(self.wave_sample_index as usize) / 2];
 
         // High nibble contains sample before low nibble
@@ -934,7 +954,7 @@ impl WaveChannel {
     }
 
     fn sample_analog(&self) -> f32 {
-        if !self.is_enabled {
+        if !self.is_dac_enabled {
             return 0.0;
         }
 
@@ -984,6 +1004,9 @@ pub struct NoiseChannel {
     /// Whether the channel is enabled, disabled channels produce silence
     is_enabled: bool,
 
+    /// Whether the DAC is enabled
+    is_dac_enabled: bool,
+
     /// If true the LFSR is 15 bits wide, otherwise 7 bits wide
     is_lfsr_wide: bool,
 
@@ -1031,6 +1054,7 @@ impl NoiseChannel {
     fn new() -> Self {
         Self {
             is_enabled: false,
+            is_dac_enabled: false,
             is_lfsr_wide: false,
             lfsr: 0,
             current_sample_bit: false,
@@ -1064,7 +1088,8 @@ impl NoiseChannel {
         self.envelope_sweep_pace = value & 0x07;
 
         // If the envelope's initial volume is 0 and envelope is decreasing, disable the channel
-        if self.initial_volume == 0 && !self.is_envelope_up {
+        self.is_dac_enabled = (self.initial_volume != 0) || self.is_envelope_up;
+        if !self.is_dac_enabled {
             self.is_enabled = false;
         }
     }
@@ -1121,6 +1146,10 @@ impl NoiseChannel {
     }
 
     fn sample_digital(&self) -> u8 {
+        if !self.is_enabled {
+            return 0;
+        }
+
         if self.current_sample_bit {
             self.volume
         } else {
@@ -1129,7 +1158,7 @@ impl NoiseChannel {
     }
 
     fn sample_analog(&self) -> f32 {
-        if !self.is_enabled {
+        if !self.is_dac_enabled {
             return 0.0;
         }
 
