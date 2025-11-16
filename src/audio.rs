@@ -286,6 +286,9 @@ pub struct Apu {
     /// Capacitor used in the right channel's high-pass filter
     hpf_right: HighPassFilter,
 
+    /// Whether the APU is currently powered on
+    is_on: bool,
+
     /// Volume for the entire system output. Is an index into the fixed SYSTEM_VOLUME_LEVELS array.
     ///
     /// Corresponds to volume knob on original hardware.
@@ -317,6 +320,7 @@ impl Apu {
             nr51: 0,
             hpf_left: HighPassFilter::new(),
             hpf_right: HighPassFilter::new(),
+            is_on: true,
             system_volume_index: DEFAULT_SYSTEM_VOLUME_INDEX,
             is_muted: false,
             debug_disable_channel_1: false,
@@ -341,6 +345,10 @@ impl Apu {
 
     pub fn channel_4_mut(&mut self) -> &mut NoiseChannel {
         &mut self.channel_4
+    }
+
+    pub fn is_on(&self) -> bool {
+        self.is_on
     }
 
     pub fn increase_system_volume(&mut self) {
@@ -420,6 +428,47 @@ impl Apu {
 
     pub fn write_nr51(&mut self, value: Register) {
         self.nr51 = value;
+    }
+
+    pub fn read_nr52(&self) -> Register {
+        let mut value = 0x70; // Unused bits always read as 1
+
+        if self.channel_1.is_enabled {
+            value |= 0x01;
+        }
+
+        if self.channel_2.is_enabled {
+            value |= 0x02;
+        }
+
+        if self.channel_3.is_enabled {
+            value |= 0x04;
+        }
+
+        if self.channel_4.is_enabled {
+            value |= 0x08;
+        }
+
+        if self.is_on {
+            value |= 0x80;
+        }
+
+        value
+    }
+
+    pub fn write_nr52(&mut self, value: Register) {
+        let was_on = self.is_on;
+
+        // Top bit controls whether APU is on
+        self.is_on = (value & 0x80) != 0;
+
+        // If APU was disabled then each individual channel should be disabled
+        if was_on && !self.is_on {
+            self.channel_1.is_enabled = false;
+            self.channel_2.is_enabled = false;
+            self.channel_3.is_enabled = false;
+            self.channel_4.is_enabled = false;
+        }
     }
 
     pub fn sample_audio(&self) -> (f32, f32) {

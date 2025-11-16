@@ -54,6 +54,10 @@ pub const HRAM_SIZE: usize = (HRAM_END - HRAM_START) as usize;
 /// Interrupt Enable Register 0xFFFF
 pub const IE_ADDRESS: Address = 0xFFFF;
 
+// Audio register addresses
+pub const NR10: Address = 0xFF10;
+pub const NR52: Address = 0xFF26;
+
 /// Wave RAM start address
 pub const WAVE_RAM_START: Address = 0xFF30;
 pub const WAVE_RAM_END: Address = 0xFF40;

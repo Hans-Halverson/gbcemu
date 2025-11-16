@@ -2,7 +2,7 @@ use concat_idents::concat_idents;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    address_space::{Address, IO_REGISTERS_SIZE},
+    address_space::{Address, IO_REGISTERS_SIZE, NR10, NR52},
     emulator::{Emulator, Register, VRAM_READ_FAILED_VALUE},
     machine::Machine,
 };
@@ -74,6 +74,15 @@ impl Emulator {
     /// Write a full byte without modification.
     fn write_register_raw(&mut self, address: Address, value: Register) {
         self.io_regs_mut().as_slice_mut()[offset(address)] = value;
+    }
+
+    fn read_non_register(&self, _: Address) -> Register {
+        // Not a valid register on this system, return all ones
+        0xFF
+    }
+
+    fn write_non_register(&mut self, _: Address, _: Register) {
+        // Ignored
     }
 
     fn read_from_write_only_register(&self, address: Address) -> Register {
@@ -181,104 +190,300 @@ impl Emulator {
         self.write_if_reg_raw(0xE0 | (0x1F & value));
     }
 
+    fn read_nr10_impl(&self, _: Address) -> Register {
+        // Bit 7 is always 1
+        self.nr10_raw() | 0x80
+    }
+
     fn write_nr10_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr10_raw(value);
         self.apu_mut().channel_1_mut().write_nrx0(value);
     }
 
+    fn read_nr11_impl(&self, _: Address) -> Register {
+        // Length timer is not readable (bits 0-5)
+        self.nr11_raw() | 0x3F
+    }
+
     fn write_nr11_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr11_raw(value);
         self.apu_mut().channel_1_mut().write_nrx1(value);
     }
 
+    fn read_nr12_impl(&self, _: Address) -> Register {
+        // Bits are all readable
+        self.nr12_raw()
+    }
+
     fn write_nr12_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr12_raw(value);
         self.apu_mut().channel_1_mut().write_nrx2(value);
     }
 
+    fn read_nr13_impl(&self, _: Address) -> Register {
+        // All bits are non-readable
+        0xFF
+    }
+
     fn write_nr13_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr13_raw(value);
         self.apu_mut().channel_1_mut().write_nrx3(value);
     }
 
+    fn read_nr14_impl(&self, _: Address) -> Register {
+        // Only bit 6 is readable
+        self.nr14_raw() | 0xBF
+    }
+
     fn write_nr14_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr14_raw(value);
         self.apu_mut().channel_1_mut().write_nrx4(value);
     }
 
+    fn read_nr21_impl(&self, _: Address) -> Register {
+        // Length timer is not readable (bits 0-5)
+        self.nr21_raw() | 0x3F
+    }
+
     fn write_nr21_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr21_raw(value);
         self.apu_mut().channel_2_mut().write_nrx1(value);
     }
 
+    fn read_nr22_impl(&self, _: Address) -> Register {
+        // Bits are all readable
+        self.nr22_raw()
+    }
+
     fn write_nr22_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr22_raw(value);
         self.apu_mut().channel_2_mut().write_nrx2(value);
     }
 
+    fn read_nr23_impl(&self, _: Address) -> Register {
+        // All bits are non-readable
+        0xFF
+    }
+
     fn write_nr23_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr23_raw(value);
         self.apu_mut().channel_2_mut().write_nrx3(value);
     }
 
+    fn read_nr24_impl(&self, _: Address) -> Register {
+        // Only bit 6 is readable
+        self.nr24_raw() | 0xBF
+    }
+
     fn write_nr24_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr24_raw(value);
         self.apu_mut().channel_2_mut().write_nrx4(value);
     }
 
+    fn read_nr30_impl(&self, _: Address) -> Register {
+        // Only bit 1 is readable
+        self.nr30_raw() | 0x7F
+    }
+
     fn write_nr30_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr30_raw(value);
         self.apu_mut().channel_3_mut().write_nr30(value);
     }
 
+    fn read_nr31_impl(&self, _: Address) -> Register {
+        // All bits are non-readable
+        0xFF
+    }
+
     fn write_nr31_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr31_raw(value);
         self.apu_mut().channel_3_mut().write_nr31(value);
     }
 
+    fn read_nr32_impl(&self, _: Address) -> Register {
+        // Only bits 5-6 are readable
+        self.nr32_raw() | 0x9F
+    }
+
     fn write_nr32_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr32_raw(value);
         self.apu_mut().channel_3_mut().write_nr32(value);
     }
 
+    fn read_nr33_impl(&self, _: Address) -> Register {
+        // All bits are non-readable
+        0xFF
+    }
+
     fn write_nr33_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr33_raw(value);
         self.apu_mut().channel_3_mut().write_nr33(value);
     }
 
+    fn read_nr34_impl(&self, _: Address) -> Register {
+        // Only bit 6 is readable
+        self.nr34_raw() | 0xBF
+    }
+
     fn write_nr34_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr34_raw(value);
         self.apu_mut().channel_3_mut().write_nr34(value);
     }
 
+    fn read_nr41_impl(&self, _: Address) -> Register {
+        // All bits are non-readable
+        0xFF
+    }
+
     fn write_nr41_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr41_raw(value);
         self.apu_mut().channel_4_mut().write_nr41(value);
     }
 
+    fn read_nr42_impl(&self, _: Address) -> Register {
+        // Bits are all readable
+        self.nr42_raw()
+    }
+
     fn write_nr42_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr42_raw(value);
         self.apu_mut().channel_4_mut().write_nr42(value);
     }
 
+    fn read_nr43_impl(&self, _: Address) -> Register {
+        // Bits are all readable
+        self.nr43_raw()
+    }
+
     fn write_nr43_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr43_raw(value);
         self.apu_mut().channel_4_mut().write_nr43(value);
     }
 
+    fn read_nr44_impl(&self, _: Address) -> Register {
+        // Only bit 6 is readable
+        self.nr44_raw() | 0xBF
+    }
+
     fn write_nr44_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr44_raw(value);
         self.apu_mut().channel_4_mut().write_nr44(value);
     }
 
+    fn read_nr50_impl(&self, _: Address) -> Register {
+        // Bits are all readable
+        self.nr50_raw()
+    }
+
     fn write_nr50_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr50_raw(value);
         self.apu_mut().write_nr50(value);
     }
 
+    fn read_nr51_impl(&self, _: Address) -> Register {
+        // Bits are all readable
+        self.nr51_raw()
+    }
+
     fn write_nr51_impl(&mut self, _: Address, value: Register) {
+        if !self.apu().is_on() {
+            return;
+        }
+
         self.write_nr51_raw(value);
         self.apu_mut().write_nr51(value);
+    }
+
+    fn read_nr52_impl(&self, _: Address) -> Register {
+        self.apu().read_nr52()
+    }
+
+    fn write_nr52_impl(&mut self, _: Address, value: Register) {
+        // Check if APU is being turned off. If so clear all audo channels before turning off APU.
+        let is_apu_turning_off = self.apu().is_on() && !is_bit_set(value, 7);
+        if is_apu_turning_off {
+            for audio_reg_addr in NR10..NR52 {
+                self.write_io_register(audio_reg_addr, value);
+            }
+        }
+
+        self.apu_mut().write_nr52(value);
     }
 
     fn write_wave_ram(&mut self, address: Address, value: Register) {
@@ -520,7 +725,7 @@ macro_rules! define_registers {
 
         const READ_HANDLERS: [fn(&Emulator, Address) -> Register; IO_REGISTERS_SIZE] = const {
             let mut handlers: [fn(&Emulator, Address) -> Register; IO_REGISTERS_SIZE] =
-                [Emulator::read_register_raw; IO_REGISTERS_SIZE];
+                [Emulator::read_non_register; IO_REGISTERS_SIZE];
 
             $(
                 handlers[offset($addr)] = Emulator::$read_fn;
@@ -531,7 +736,7 @@ macro_rules! define_registers {
 
         const WRITE_HANDLERS: [fn(&mut Emulator, Address, Register); IO_REGISTERS_SIZE] = const {
             let mut handlers: [fn(&mut Emulator, Address, Register); IO_REGISTERS_SIZE] =
-                [Emulator::write_register_raw; IO_REGISTERS_SIZE];
+                [Emulator::write_non_register; IO_REGISTERS_SIZE];
 
             $(
                 handlers[offset($addr)] = Emulator::$write_fn;
@@ -580,34 +785,27 @@ define_registers!(
     ),
     (tac, 0xFF07, 0xF8, 0xF8, read_tac_impl, write_tac_impl),
     (if_reg, 0xFF0F, 0xE1, 0xE1, read_register_raw, write_if_impl),
-    (nr10, 0xFF10, 0x80, 0x80, read_register_raw, write_nr10_impl),
-    (nr11, 0xFF11, 0xBF, 0xBF, read_register_raw, write_nr11_impl),
-    (nr12, 0xFF12, 0xF3, 0xF3, read_register_raw, write_nr12_impl),
-    (nr13, 0xFF13, 0xFF, 0xFF, read_register_raw, write_nr13_impl),
-    (nr14, 0xFF14, 0xBF, 0xBF, read_register_raw, write_nr14_impl),
-    (nr21, 0xFF16, 0x3F, 0x3F, read_register_raw, write_nr21_impl),
-    (nr22, 0xFF17, 0x00, 0x00, read_register_raw, write_nr22_impl),
-    (nr23, 0xFF18, 0xFF, 0xFF, read_register_raw, write_nr23_impl),
-    (nr24, 0xFF19, 0xBF, 0xBF, read_register_raw, write_nr24_impl),
-    (nr30, 0xFF1A, 0x7F, 0x7F, read_register_raw, write_nr30_impl),
-    (nr31, 0xFF1B, 0xFF, 0xFF, read_register_raw, write_nr31_impl),
-    (nr32, 0xFF1C, 0x9F, 0x9F, read_register_raw, write_nr32_impl),
-    (nr33, 0xFF1D, 0xFF, 0xFF, read_register_raw, write_nr33_impl),
-    (nr34, 0xFF1E, 0xBF, 0xBF, read_register_raw, write_nr34_impl),
-    (nr41, 0xFF20, 0xFF, 0xFF, read_register_raw, write_nr41_impl),
-    (nr42, 0xFF21, 0x00, 0x00, read_register_raw, write_nr42_impl),
-    (nr43, 0xFF22, 0x00, 0x00, read_register_raw, write_nr43_impl),
-    (nr44, 0xFF23, 0xBF, 0xBF, read_register_raw, write_nr44_impl),
-    (nr50, 0xFF24, 0x77, 0x77, read_register_raw, write_nr50_impl),
-    (nr51, 0xFF25, 0xF3, 0xF3, read_register_raw, write_nr51_impl),
-    (
-        nr52,
-        0xFF26,
-        0xF1,
-        0xF1,
-        read_register_raw,
-        write_register_raw
-    ),
+    (nr10, NR10, 0x80, 0x80, read_nr10_impl, write_nr10_impl),
+    (nr11, 0xFF11, 0xBF, 0xBF, read_nr11_impl, write_nr11_impl),
+    (nr12, 0xFF12, 0xF3, 0xF3, read_nr12_impl, write_nr12_impl),
+    (nr13, 0xFF13, 0xFF, 0xFF, read_nr13_impl, write_nr13_impl),
+    (nr14, 0xFF14, 0xBF, 0xBF, read_nr14_impl, write_nr14_impl),
+    (nr21, 0xFF16, 0x3F, 0x3F, read_nr21_impl, write_nr21_impl),
+    (nr22, 0xFF17, 0x00, 0x00, read_nr22_impl, write_nr22_impl),
+    (nr23, 0xFF18, 0xFF, 0xFF, read_nr23_impl, write_nr23_impl),
+    (nr24, 0xFF19, 0xBF, 0xBF, read_nr24_impl, write_nr24_impl),
+    (nr30, 0xFF1A, 0x7F, 0x7F, read_nr30_impl, write_nr30_impl),
+    (nr31, 0xFF1B, 0xFF, 0xFF, read_nr31_impl, write_nr31_impl),
+    (nr32, 0xFF1C, 0x9F, 0x9F, read_nr32_impl, write_nr32_impl),
+    (nr33, 0xFF1D, 0xFF, 0xFF, read_nr33_impl, write_nr33_impl),
+    (nr34, 0xFF1E, 0xBF, 0xBF, read_nr34_impl, write_nr34_impl),
+    (nr41, 0xFF20, 0xFF, 0xFF, read_nr41_impl, write_nr41_impl),
+    (nr42, 0xFF21, 0x00, 0x00, read_nr42_impl, write_nr42_impl),
+    (nr43, 0xFF22, 0x00, 0x00, read_nr43_impl, write_nr43_impl),
+    (nr44, 0xFF23, 0xBF, 0xBF, read_nr44_impl, write_nr44_impl),
+    (nr50, 0xFF24, 0x77, 0x77, read_nr50_impl, write_nr50_impl),
+    (nr51, 0xFF25, 0xF3, 0xF3, read_nr51_impl, write_nr51_impl),
+    (nr52, NR52, 0xF1, 0xF1, read_nr52_impl, write_nr52_impl),
     (wave0, 0xFF30, 0x00, 0x00, read_register_raw, write_wave_ram),
     (wave1, 0xFF31, 0xFF, 0xFF, read_register_raw, write_wave_ram),
     (wave2, 0xFF32, 0x00, 0x00, read_register_raw, write_wave_ram),
