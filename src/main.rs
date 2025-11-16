@@ -3,7 +3,7 @@ use gbcemu::{
     audio::DefaultSystemAudioOutput,
     cartridge::Cartridge,
     emulator::{EmulatorBuilder, SharedInputAdapter, SharedOutputBuffer},
-    gui::start_gui,
+    gui::shell::start_emulator_shell_app,
     machine::Machine,
     options::{Args, Options},
     save_file::SAVE_FILE_EXTENSION,
@@ -31,7 +31,7 @@ fn main() {
         start_emulator_thread(&args, options.clone(), input_adapter, output_buffer.clone());
 
     if !args.headless && !args.dump_rom_info {
-        start_gui(commands_tx, output_buffer);
+        start_emulator_shell_app(commands_tx, output_buffer);
     } else {
         emulator_thread.join().unwrap();
     }
