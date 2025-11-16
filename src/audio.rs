@@ -829,7 +829,7 @@ impl WaveChannel {
     }
 
     fn sample_digital(&self) -> u8 {
-        let wave_ram_byte = self.wave_ram[(self.wave_sample_index as usize) / 8];
+        let wave_ram_byte = self.wave_ram[(self.wave_sample_index as usize) / 2];
 
         // High nibble contains sample before low nibble
         let wave_sample = if self.wave_sample_index % 2 == 0 {
@@ -857,6 +857,7 @@ impl WaveChannel {
     fn trigger(&mut self) {
         self.is_enabled = true;
         self.period_timer = self.initial_period_timer();
+        self.wave_sample_index = 0;
 
         if self.length_timer == 0 {
             self.length_timer = self.initial_length_timer;
