@@ -5,7 +5,7 @@ use eframe::{
     epaint::CornerRadius,
 };
 use muda::{
-    CheckMenuItem, Menu, MenuEvent, MenuItem, Submenu,
+    CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
     accelerator::{Accelerator, Code, Modifiers},
 };
 
@@ -67,6 +67,9 @@ impl GuiApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 SAVE_ITEM_ID => self.commands_tx.send(Command::Save).unwrap(),
+                MUTE_ITEM_ID => self.commands_tx.send(Command::ToggleMute).unwrap(),
+                VOLUME_UP_ITEM_ID => self.commands_tx.send(Command::VolumeUp).unwrap(),
+                VOLUME_DOWN_ITEM_ID => self.commands_tx.send(Command::VolumeDown).unwrap(),
                 RESIZE_TO_FIT_ITEM_ID => self.resize_to_fit(ctx),
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
@@ -198,6 +201,9 @@ const SAVE_ITEM_ID: &str = "save";
 const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
 const QUICK_SAVE_ITEM_ID_PREFIX: &str = "quick_save_";
 const LOAD_QUICK_SAVE_ITEM_ID_PREFIX: &str = "load_quick_save_";
+const MUTE_ITEM_ID: &str = "mute";
+const VOLUME_UP_ITEM_ID: &str = "volume_up";
+const VOLUME_DOWN_ITEM_ID: &str = "volume_down";
 const TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX: &str = "toggle_audio_channel_";
 
 fn create_app_menu() -> Menu {
@@ -278,7 +284,34 @@ fn create_app_menu() -> Menu {
             .unwrap();
     }
 
-    let audio_menu = Submenu::with_items("Audio", true, &[&channels_submenu]).unwrap();
+    let audio_menu = Submenu::with_items(
+        "Audio",
+        true,
+        &[
+            &MenuItem::with_id(
+                MUTE_ITEM_ID,
+                "Mute",
+                true,
+                Some(Accelerator::new(Some(Modifiers::META), Code::KeyM)),
+            ),
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id(
+                VOLUME_UP_ITEM_ID,
+                "Volume Up",
+                true,
+                Some(Accelerator::new(Some(Modifiers::META), Code::Equal)),
+            ),
+            &MenuItem::with_id(
+                VOLUME_DOWN_ITEM_ID,
+                "Volume Down",
+                true,
+                Some(Accelerator::new(Some(Modifiers::META), Code::Minus)),
+            ),
+            &PredefinedMenuItem::separator(),
+            &channels_submenu,
+        ],
+    )
+    .unwrap();
 
     let window_menu = Submenu::with_items(
         "Window",

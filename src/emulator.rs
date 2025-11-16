@@ -108,6 +108,12 @@ pub enum Command {
     LoadQuickSave(usize),
     /// Set whether the emulator is in turbo mode
     SetTurboMode(bool),
+    /// Increase volume of the emulator
+    VolumeUp,
+    /// Decrease volume of the emulator
+    VolumeDown,
+    /// Toggle mute on or off
+    ToggleMute,
     /// Toggle the given audio channel on or off
     ToggleAudioChannel(usize),
 }
@@ -995,6 +1001,9 @@ impl Emulator {
                 Command::QuickSave(slot) => self.quick_save(slot),
                 Command::LoadQuickSave(slot) => self.load_quick_save(slot),
                 Command::SetTurboMode(in_turbo_mode) => self.in_turbo_mode = in_turbo_mode,
+                Command::VolumeUp => self.apu_mut().increase_system_volume(),
+                Command::VolumeDown => self.apu_mut().decrease_system_volume(),
+                Command::ToggleMute => self.apu_mut().toggle_muted(),
                 Command::ToggleAudioChannel(channel) => self.apu_mut().toggle_channel(channel),
             }
         }

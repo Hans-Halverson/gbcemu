@@ -18,6 +18,9 @@ pub const NUM_AUDIO_CHANNELS: u8 = 4;
 
 pub const TICKS_PER_SAMPLE: f64 = (TICKS_PER_FRAME as f64 * REFRESH_RATE) / (SAMPLE_RATE as f64);
 
+const SYSTEM_VOLUME_LEVELS: [f32; 8] = [0.0, 0.0625, 0.125, 0.25, 0.375, 0.5, 0.65, 1.0];
+const DEFAULT_SYSTEM_VOLUME_INDEX: usize = 5;
+
 /// A generic audio output device which can be attached to an emulator
 pub trait AudioOutput {
     fn send_frame(&self, samples: VecDeque<TimedSample>);
@@ -255,6 +258,14 @@ pub struct Apu {
     /// Full NR51 register value. Each bit controls whether left/right output uses each channel.
     nr51: Register,
 
+    /// Volume for the entire system output. Is an index into the fixed SYSTEM_VOLUME_LEVELS array.
+    ///
+    /// Corresponds to volume knob on original hardware.
+    system_volume_index: usize,
+
+    /// Whether the APU is currently muted
+    is_muted: bool,
+
     /// Debug flags to disable each channel's output
     debug_disable_channel_1: bool,
     debug_disable_channel_2: bool,
@@ -273,6 +284,8 @@ impl Apu {
             left_volume: 0,
             right_volume: 0,
             nr51: 0,
+            system_volume_index: DEFAULT_SYSTEM_VOLUME_INDEX,
+            is_muted: false,
             debug_disable_channel_1: false,
             debug_disable_channel_2: false,
             debug_disable_channel_3: false,
@@ -294,6 +307,19 @@ impl Apu {
 
     pub fn channel_4_mut(&mut self) -> &mut NoiseChannel {
         &mut self.channel_4
+    }
+
+    pub fn increase_system_volume(&mut self) {
+        self.system_volume_index =
+            (self.system_volume_index + 1).min(SYSTEM_VOLUME_LEVELS.len() - 1);
+    }
+
+    pub fn decrease_system_volume(&mut self) {
+        self.system_volume_index = self.system_volume_index.saturating_sub(1);
+    }
+
+    pub fn toggle_muted(&mut self) {
+        self.is_muted = !self.is_muted;
     }
 
     pub fn toggle_channel(&mut self, channel: usize) {
@@ -359,6 +385,11 @@ impl Apu {
     }
 
     pub fn sample_audio(&self) -> (f32, f32) {
+        // When muted immediately return silence without sampling
+        if self.is_muted {
+            return (0.0, 0.0);
+        }
+
         let mut mixed_left = 0.0;
         let mut mixed_right = 0.0;
 
@@ -418,11 +449,18 @@ impl Apu {
         mixed_left /= 4.0;
         mixed_right /= 4.0;
 
-        // Scale by channel volumes, 0 == volume 1, 7 == volume 8
-        let final_left = mixed_left * ((self.left_volume as f32 + 1.0) / 8.0);
-        let final_right = mixed_right * ((self.right_volume as f32 + 1.0) / 8.0);
+        let system_volume = SYSTEM_VOLUME_LEVELS[self.system_volume_index];
+
+        let final_left = mixed_left * system_volume * Self::channel_volume_analog(self.left_volume);
+        let final_right =
+            mixed_right * system_volume * Self::channel_volume_analog(self.right_volume);
 
         (final_left, final_right)
+    }
+
+    /// Channel volume 0 maps to volume 1, 7 maps to volume 8
+    fn channel_volume_analog(channel_volume: u8) -> f32 {
+        (channel_volume as f32 + 1.0) / 8.0
     }
 }
 
