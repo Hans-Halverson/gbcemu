@@ -10,6 +10,7 @@ use gbcemu::{
 };
 
 use std::{
+    fs,
     sync::{Arc, mpsc::channel},
     thread::{self, JoinHandle},
 };
@@ -37,10 +38,6 @@ fn main() {
     }
 }
 
-fn read_file(path: &str) -> Vec<u8> {
-    std::fs::read(path).expect("Failed to read file")
-}
-
 fn start_emulator_thread(
     args: &Args,
     options: Arc<Options>,
@@ -50,10 +47,11 @@ fn start_emulator_thread(
     let machine = if args.cgb { Machine::Cgb } else { Machine::Dmg };
     let rom_or_save_path = args.rom_or_save.clone();
     let dump_rom_info = args.dump_rom_info;
+    let bios_path = args.bios.clone();
 
     spawn_emulator_thread(move || {
-        let emulator_builder = if rom_or_save_path.ends_with(SAVE_FILE_EXTENSION) {
-            let save_file_bytes = read_file(&rom_or_save_path);
+        let mut emulator_builder = if rom_or_save_path.ends_with(SAVE_FILE_EXTENSION) {
+            let save_file_bytes = fs::read(&rom_or_save_path).expect("Failed to read save file");
             let save_file = rmp_serde::from_slice(&save_file_bytes)
                 .expect("Could not read save file, save file format may have changed");
 
@@ -62,7 +60,7 @@ fn start_emulator_thread(
         } else if rom_or_save_path.ends_with(GB_FILE_EXTENSION)
             || rom_or_save_path.ends_with(GBC_FILE_EXTENSION)
         {
-            let rom_bytes = read_file(&rom_or_save_path);
+            let rom_bytes = fs::read(&rom_or_save_path).expect("Failed to read ROM");
             let cartridge = Cartridge::new_from_rom_bytes(rom_bytes);
 
             let save_file_path = rom_or_save_path
@@ -79,12 +77,17 @@ fn start_emulator_thread(
             );
         };
 
-        let mut emulator = emulator_builder
+        emulator_builder = emulator_builder
             .with_options(options)
             .with_input_adapter(input_adapter)
             .with_output_buffer(output_buffer)
-            .with_audio_output(Box::new(DefaultSystemAudioOutput::new()))
-            .build();
+            .with_audio_output(Box::new(DefaultSystemAudioOutput::new()));
+
+        if let Some(bios_path) = bios_path {
+            emulator_builder = emulator_builder.with_bios_path(bios_path);
+        }
+
+        let mut emulator = emulator_builder.build();
 
         if dump_rom_info {
             println!("{:?}", emulator.cartridge());

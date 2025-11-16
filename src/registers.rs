@@ -37,7 +37,7 @@ pub struct Registers {
 impl Registers {
     fn new_for_dmg() -> Self {
         Registers {
-            pc: 0x0100,
+            pc: 0x0000,
             sp: 0xFFFE,
             a: 0x01,
             bc: [0x00, 0x13],
@@ -55,7 +55,7 @@ impl Registers {
 
     fn new_for_cgb() -> Self {
         Registers {
-            pc: 0x0100,
+            pc: 0x0000,
             sp: 0xFFFE,
             a: 0x11,
             bc: [0x00, 0x00],

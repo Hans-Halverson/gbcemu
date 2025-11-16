@@ -1,7 +1,7 @@
 use std::{
     array,
     collections::VecDeque,
-    mem,
+    fs, mem,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -17,11 +17,11 @@ use serde_bytes::ByteBuf;
 
 use crate::{
     address_space::{
-        Address, ECHO_RAM_END, EXTERNAL_RAM_END, FIRST_WORK_RAM_BANK_END,
-        FIRST_WORK_RAM_BANK_START, HRAM_END, HRAM_SIZE, HRAM_START, IE_ADDRESS, IO_REGISTERS_END,
-        OAM_END, OAM_SIZE, OAM_START, ROM_END, SECOND_WORK_RAM_BANK_END,
-        SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE, SINGLE_WORK_RAM_BANK_SIZE,
-        UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
+        Address, CGB_BIOS_END, DMG_BIOS_END, ECHO_RAM_END, EXTERNAL_RAM_END,
+        FIRST_WORK_RAM_BANK_END, FIRST_WORK_RAM_BANK_START, HRAM_END, HRAM_SIZE, HRAM_START,
+        IE_ADDRESS, IO_REGISTERS_END, OAM_END, OAM_SIZE, OAM_START, ROM_END,
+        SECOND_WORK_RAM_BANK_END, SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE,
+        SINGLE_WORK_RAM_BANK_SIZE, UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
     },
     audio::{Apu, AudioOutput, TICKS_PER_SAMPLE, TimedSample},
     cartridge::Cartridge,
@@ -329,6 +329,9 @@ pub struct Emulator {
     #[serde(skip)]
     audio_output: Option<Box<dyn AudioOutput>>,
 
+    /// Contents of the BIOS used during boot, if any
+    bios: Option<Vec<u8>>,
+
     /// The save file for this ROM, if any
     #[serde(skip)]
     save_file: Option<Box<SaveFile>>,
@@ -506,6 +509,12 @@ impl EmulatorBuilder {
         self
     }
 
+    pub fn with_bios_path(mut self, bios_path: String) -> Self {
+        let bios = fs::read(bios_path).expect("Failed to read BIOS");
+        self.emulator.bios = Some(bios);
+        self
+    }
+
     pub fn build(self) -> Emulator {
         self.emulator
     }
@@ -523,6 +532,7 @@ impl Emulator {
             input_adapter: None,
             output_buffer: None,
             audio_output: None,
+            bios: None,
             save_file: None,
             save_file_path: None,
             machine,
@@ -759,7 +769,13 @@ impl Emulator {
 
     /// Run the emulator at the GameBoy's native framerate
     pub fn run(&mut self) {
-        self.emulate_boot_sequence();
+        // Execute the BIOS if one was provided, otherwise start directly at the cartridge entry
+        // point from the standard initial state after the BIOS completes.
+        self.set_is_booting(true);
+
+        if self.bios.is_none() {
+            self.emulate_boot_sequence();
+        }
 
         let start_time = Instant::now();
         let mut last_save_file_flush_time = Instant::now();
@@ -1198,6 +1214,12 @@ impl Emulator {
     /// May be mapped to a register or may be mapped to cartridge memory via the MBC.
     pub fn read_address(&self, addr: Address) -> u8 {
         if addr < ROM_END {
+            // While booting this may be mapped to the BIOS instead
+            if self.is_booting() && self.is_bios_addr(addr) {
+                let physical_addr = self.physical_bios_address(addr);
+                return self.bios.as_ref().unwrap()[physical_addr];
+            }
+
             // No support needed yet for reading registers from RAM area
             let mapped_addr = self.cartridge.mbc().map_read_rom_address(addr);
             self.cartridge.rom()[mapped_addr]
@@ -1275,6 +1297,24 @@ impl Emulator {
             self.ie = value;
         } else {
             unreachable!()
+        }
+    }
+
+    fn is_bios_addr(&self, addr: Address) -> bool {
+        if self.is_cgb_machine() {
+            // The range from 0x100-0x200 is mapped to cartridge memory, not BIOS
+            addr < CGB_BIOS_END && !(addr >= 0x100 && addr < 0x200)
+        } else {
+            addr < DMG_BIOS_END
+        }
+    }
+
+    fn physical_bios_address(&self, addr: Address) -> usize {
+        if addr < DMG_BIOS_END {
+            // First 0x100 bytes
+            addr as usize
+        } else {
+            (addr - 0x100) as usize
         }
     }
 
@@ -1621,6 +1661,9 @@ impl Emulator {
 
         // Unmap the boot ROM by writing A to the bank register
         self.write_bank(self.regs().a());
+
+        // Execution starts at 0x100 after the boot ROM completes
+        self.regs.set_pc(0x0100);
     }
 
     /// Sample the current audio channels and push to current frame's sample queue

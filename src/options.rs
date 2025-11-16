@@ -23,6 +23,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub test: bool,
 
+    /// Path to the boot ROM to use
+    #[arg(long)]
+    pub bios: Option<String>,
+
     /// ROM or save file to run
     #[arg(required = true)]
     pub rom_or_save: String,

@@ -62,3 +62,9 @@ pub const NR52: Address = 0xFF26;
 pub const WAVE_RAM_START: Address = 0xFF30;
 pub const WAVE_RAM_END: Address = 0xFF40;
 pub const WAVE_RAM_SIZE: usize = (WAVE_RAM_END - WAVE_RAM_START) as usize;
+
+/// End address for DMG BIOS when mapped over ROM
+pub const DMG_BIOS_END: Address = 0x0100;
+
+/// End address for CGB BIOS when mapped over ROM
+pub const CGB_BIOS_END: Address = 0x0900;
