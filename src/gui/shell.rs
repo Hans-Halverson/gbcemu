@@ -1,7 +1,7 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
 use eframe::{
-    egui::{self, Key, Rect, Vec2, ViewportCommand},
+    egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Vec2, ViewportCommand},
     epaint::CornerRadius,
 };
 use muda::Menu;
@@ -27,17 +27,7 @@ pub fn start_emulator_shell_app(commands_tx: Sender<Command>, output_buffer: Sha
                 .with_title_shown(true),
             ..Default::default()
         },
-        Box::new(|_| {
-            let menu = create_app_menu();
-
-            Ok(Box::new(EmulatorShellApp {
-                commands_tx,
-                pixels: output_buffer,
-                pressed_buttons: 0,
-                in_turbo_mode: false,
-                _menu: menu,
-            }))
-        }),
+        Box::new(|_| Ok(Box::new(EmulatorShellApp::new(commands_tx, output_buffer)))),
     )
     .unwrap()
 }
@@ -46,15 +36,39 @@ pub fn start_emulator_shell_app(commands_tx: Sender<Command>, output_buffer: Sha
 const GUI_FPS: f64 = 60.0;
 
 pub struct EmulatorShellApp {
+    /// Channel to send commands to the emulator
     commands_tx: Sender<Command>,
-    pixels: SharedOutputBuffer,
+
+    /// Output from the emulator shared across threads
+    shared_output: SharedOutputBuffer,
+
+    /// Set of buttons that were pressed last frame
     pressed_buttons: u8,
+
+    /// Whether we are currently in turbo mode, speeding up the emulation
     in_turbo_mode: bool,
+
+    /// Whether the FPS counter should be shown onscreen
+    show_fps: bool,
+
     /// The app menu. Must be kept alive for the menu to function.
     _menu: Menu,
 }
 
 impl EmulatorShellApp {
+    fn new(commands_tx: Sender<Command>, shared_output: SharedOutputBuffer) -> Self {
+        let menu = create_app_menu();
+
+        Self {
+            commands_tx,
+            shared_output,
+            pressed_buttons: 0,
+            in_turbo_mode: false,
+            show_fps: false,
+            _menu: menu,
+        }
+    }
+
     pub fn send_command(&self, command: Command) {
         self.commands_tx.send(command).unwrap();
     }
@@ -100,26 +114,42 @@ impl EmulatorShellApp {
         }
     }
 
-    fn draw_screen(&mut self, ctx: &egui::Context) {
-        let scale_factor = self.calculate_scale_factor(ctx);
-
+    fn draw(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            let painter = ui.painter();
+            self.draw_screen(ui);
 
-            for y in 0..SCREEN_HEIGHT {
-                for x in 0..SCREEN_WIDTH {
-                    let color = self.pixels.read_pixel(x, y);
-                    painter.rect_filled(
-                        Rect::from_x_y_ranges(
-                            ((x as f32) * scale_factor)..=((x as f32 + 1.0) * scale_factor),
-                            ((y as f32) * scale_factor)..=((y as f32 + 1.0) * scale_factor),
-                        ),
-                        CornerRadius::ZERO,
-                        color,
-                    );
-                }
+            if self.show_fps {
+                self.draw_frame_rate_counter(ui);
             }
         });
+    }
+
+    fn draw_screen(&self, ui: &mut egui::Ui) {
+        let scale_factor = self.calculate_scale_factor(ui.ctx());
+        let painter = ui.painter();
+
+        for y in 0..SCREEN_HEIGHT {
+            for x in 0..SCREEN_WIDTH {
+                let color = self.shared_output.read_pixel(x, y);
+                painter.rect_filled(
+                    rect_for_coordinate(x, y, scale_factor),
+                    CornerRadius::ZERO,
+                    color,
+                );
+            }
+        }
+    }
+
+    fn draw_frame_rate_counter(&self, ui: &mut egui::Ui) {
+        let fps = self.shared_output.frame_rate();
+
+        ui.painter().text(
+            Pos2::new(4.0, 4.0),
+            Align2::LEFT_TOP,
+            fps.to_string(),
+            FontId::monospace(24.0),
+            FPS_COUNTER_COLOR,
+        );
     }
 
     fn calculate_scale_factor(&self, ctx: &egui::Context) -> f32 {
@@ -141,6 +171,10 @@ impl EmulatorShellApp {
 
         ctx.send_viewport_cmd(ViewportCommand::InnerSize(new_size));
     }
+
+    pub fn toggle_show_fps(&mut self) {
+        self.show_fps = !self.show_fps;
+    }
 }
 
 impl eframe::App for EmulatorShellApp {
@@ -151,6 +185,15 @@ impl eframe::App for EmulatorShellApp {
         self.handle_pressed_buttons(ctx);
         self.handle_turbo_mode(ctx);
 
-        self.draw_screen(ctx);
+        self.draw(ctx);
     }
+}
+
+const FPS_COUNTER_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(0, 0, 255, 128);
+
+fn rect_for_coordinate(x: usize, y: usize, scale_factor: f32) -> Rect {
+    Rect::from_x_y_ranges(
+        ((x as f32) * scale_factor)..=(((x as f32) + 1.0) * scale_factor),
+        ((y as f32) * scale_factor)..=(((y as f32) + 1.0) * scale_factor),
+    )
 }

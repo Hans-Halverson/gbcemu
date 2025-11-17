@@ -3,6 +3,7 @@ pub mod audio;
 pub mod cartridge;
 mod cpu;
 pub mod emulator;
+mod frame_tracker;
 pub mod gui;
 mod io_registers;
 pub mod machine;

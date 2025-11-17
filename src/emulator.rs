@@ -25,6 +25,7 @@ use crate::{
     },
     audio::{Apu, AudioOutput, TICKS_PER_SAMPLE, TimedSample},
     cartridge::Cartridge,
+    frame_tracker::FrameTracker,
     io_registers::IoRegisters,
     machine::Machine,
     mbc::mbc::Location,
@@ -44,6 +45,7 @@ pub const SCREEN_HEIGHT: usize = 144;
 #[derive(Clone)]
 pub struct SharedOutputBuffer {
     pixels: Arc<[[AtomicU32; SCREEN_WIDTH]; SCREEN_HEIGHT]>,
+    frame_rate: Arc<AtomicU32>,
 }
 
 impl SharedOutputBuffer {
@@ -54,7 +56,9 @@ impl SharedOutputBuffer {
             }),
         );
 
-        Self { pixels }
+        let frame_rate = Arc::new(AtomicU32::new(0));
+
+        Self { pixels, frame_rate }
     }
 
     pub fn read_pixel(&self, x: usize, y: usize) -> Color32 {
@@ -75,6 +79,10 @@ impl SharedOutputBuffer {
             | (color.a() as u32);
 
         self.pixels[y][x].store(encoded, Ordering::Relaxed);
+    }
+
+    pub fn frame_rate(&self) -> u32 {
+        self.frame_rate.load(Ordering::Relaxed)
     }
 }
 
@@ -450,6 +458,10 @@ pub struct Emulator {
 
     /// Queue of audio samples built in the current frame
     audio_sample_queue: VecDeque<TimedSample>,
+
+    /// Utility which tracks frame rate
+    #[serde(skip)]
+    frame_tracker: FrameTracker,
 }
 
 pub struct EmulatorBuilder {
@@ -571,6 +583,7 @@ impl Emulator {
             is_double_speed: false,
             is_paused: false,
             audio_sample_queue: VecDeque::new(),
+            frame_tracker: FrameTracker::new(),
         }
     }
 
@@ -778,7 +791,10 @@ impl Emulator {
         }
 
         let start_time = Instant::now();
-        let mut last_save_file_flush_time = Instant::now();
+        let mut last_save_file_flush_time = start_time;
+
+        let output_frame_rate = self.output_buffer.as_ref().map(|o| o.frame_rate.clone());
+        self.frame_tracker.init(start_time, output_frame_rate);
 
         loop {
             let frame_start_nanos = duration_to_nanos(Instant::now().duration_since(start_time));
@@ -799,6 +815,9 @@ impl Emulator {
 
             // Push a single audio frame to the audio output, if any
             self.flush_audio_frame();
+
+            // Track frame completion in FPS counter
+            self.frame_tracker.frame_complete();
 
             // Increment frame number (backed by microframes)
             self.microframe += self.microframes_per_frame();
@@ -1689,7 +1708,7 @@ impl Emulator {
 }
 
 /// Convert a duration to nanoseconds, assuming it fits in u64.
-fn duration_to_nanos(duration: Duration) -> u64 {
+pub fn duration_to_nanos(duration: Duration) -> u64 {
     let seconds = duration.as_secs();
     let subsec_nanos = duration.subsec_nanos() as u64;
     seconds * 1_000_000_000 + subsec_nanos

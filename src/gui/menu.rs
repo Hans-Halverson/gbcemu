@@ -14,7 +14,6 @@ use crate::{
 const QUIT_ITEM_ID: &str = "quit";
 const PAUSE_ITEM_ID: &str = "pause";
 const SAVE_ITEM_ID: &str = "save";
-const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
 const QUICK_SAVE_ITEM_ID_PREFIX: &str = "quick_save_";
 const LOAD_QUICK_SAVE_ITEM_ID_PREFIX: &str = "load_quick_save_";
 const MUTE_ITEM_ID: &str = "mute";
@@ -22,6 +21,8 @@ const VOLUME_UP_ITEM_ID: &str = "volume_up";
 const VOLUME_DOWN_ITEM_ID: &str = "volume_down";
 const TOGGLE_HPF_ITEM_ID: &str = "toggle_hpf";
 const TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX: &str = "toggle_audio_channel_";
+const SHOW_FPS_ITEM_ID: &str = "show_fps";
+const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
 
 impl EmulatorShellApp {
     pub(super) fn handle_menu_events(&mut self, ctx: &egui::Context) {
@@ -38,6 +39,7 @@ impl EmulatorShellApp {
                 VOLUME_DOWN_ITEM_ID => self.send_command(Command::VolumeDown),
                 TOGGLE_HPF_ITEM_ID => self.send_command(Command::ToggleHpf),
                 RESIZE_TO_FIT_ITEM_ID => self.resize_to_fit(ctx),
+                SHOW_FPS_ITEM_ID => self.toggle_show_fps(),
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
                         let slot = usize::from_str(slot_number).unwrap();
@@ -194,6 +196,21 @@ fn audio_menu() -> Submenu {
     .unwrap()
 }
 
+fn debug_menu() -> Submenu {
+    Submenu::with_items(
+        "Debug",
+        true,
+        &[&CheckMenuItem::with_id(
+            SHOW_FPS_ITEM_ID,
+            "Show FPS",
+            true,
+            false,
+            None,
+        )],
+    )
+    .unwrap()
+}
+
 fn window_menu() -> Submenu {
     Submenu::with_items(
         "Window",
@@ -214,6 +231,7 @@ pub fn create_app_menu() -> Menu {
     menu.append(&app_name_menu()).unwrap();
     menu.append(&emulator_menu()).unwrap();
     menu.append(&audio_menu()).unwrap();
+    menu.append(&debug_menu()).unwrap();
     menu.append(&window_menu()).unwrap();
 
     #[cfg(target_os = "macos")]
