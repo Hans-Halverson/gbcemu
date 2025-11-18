@@ -1,7 +1,5 @@
 use std::{
-    array,
-    collections::VecDeque,
-    fs, mem,
+    array, fs, mem,
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -23,7 +21,7 @@ use crate::{
         SECOND_WORK_RAM_BANK_END, SECOND_WORK_RAM_BANK_START, SINGLE_VRAM_BANK_SIZE,
         SINGLE_WORK_RAM_BANK_SIZE, UNUSABLE_SPACE_END, VRAM_END, VRAM_START,
     },
-    audio::{Apu, AudioOutput, TICKS_PER_SAMPLE, TimedSample},
+    audio::{Apu, AudioFrame, AudioOutput, TICKS_PER_SAMPLE, TimedSample},
     cartridge::Cartridge,
     frame_tracker::FrameTracker,
     io_registers::IoRegisters,
@@ -462,8 +460,8 @@ pub struct Emulator {
     #[serde(skip)]
     is_paused: bool,
 
-    /// Queue of audio samples built in the current frame
-    audio_sample_queue: VecDeque<TimedSample>,
+    /// All audio samples in the current frame
+    current_audio_frame: AudioFrame,
 
     /// Utility which tracks frame rate
     #[serde(skip)]
@@ -588,7 +586,7 @@ impl Emulator {
             is_booting: true,
             is_double_speed: false,
             is_paused: false,
-            audio_sample_queue: VecDeque::new(),
+            current_audio_frame: Vec::new(),
             frame_tracker: FrameTracker::new(),
         }
     }
@@ -1016,7 +1014,7 @@ impl Emulator {
         }
 
         // Sample audio if necessary
-        if self.tick % TICKS_PER_SAMPLE as u32 == 0 {
+        if self.tick % (TICKS_PER_SAMPLE / 10.0) as u32 == 0 {
             self.push_next_sample();
         }
 
@@ -1695,23 +1693,23 @@ impl Emulator {
         self.regs.set_pc(0x0100);
     }
 
-    /// Sample the current audio channels and push to current frame's sample queue
+    /// Sample the current audio channels and push to the current frame builder
     fn push_next_sample(&mut self) {
         let (left, right) = self.apu().sample_audio();
         let (left, right) = self.apu_mut().apply_hpf(left, right);
 
-        self.audio_sample_queue.push_back(TimedSample {
+        self.current_audio_frame.push(TimedSample {
             left,
             right,
             tick: self.tick,
         });
     }
 
-    /// Flush the current audio frame queue to the audio output, if any
+    /// Flush the current audio frame to the audio output, if any
     fn flush_audio_frame(&mut self) {
         if let Some(audio_output) = &mut self.audio_output {
-            let mut audio_frame = VecDeque::new();
-            mem::swap(&mut audio_frame, &mut self.audio_sample_queue);
+            let mut audio_frame = Vec::new();
+            mem::swap(&mut audio_frame, &mut self.current_audio_frame);
             audio_output.send_frame(audio_frame);
         }
     }

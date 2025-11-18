@@ -26,16 +26,19 @@ const HPF_RECHARGE_RATE: f32 = 0.996;
 
 /// A generic audio output device which can be attached to an emulator
 pub trait AudioOutput {
-    fn send_frame(&self, samples: VecDeque<TimedSample>);
+    fn send_frame(&self, samples: AudioFrame);
     fn set_paused_state(&self, is_paused: bool);
 }
 
 enum AudioMessage {
     /// The next audio frame
-    FrameSamples(VecDeque<TimedSample>),
+    FrameSamples(AudioFrame),
     /// Whether audio should be paused
     PausedState(bool),
 }
+
+/// A collection of audio samples corresponding to a single (graphical) frame
+pub type AudioFrame = Vec<TimedSample>;
 
 fn shared_audio_channel() -> (SharedAudioSender, SharedAudioReceiver) {
     let (send, recv) = mpsc::channel();
@@ -47,7 +50,7 @@ pub struct SharedAudioSender {
 }
 
 impl SharedAudioSender {
-    fn send_frame(&self, samples: VecDeque<TimedSample>) {
+    fn send_frame(&self, samples: AudioFrame) {
         self.send.send(AudioMessage::FrameSamples(samples)).unwrap();
     }
 
@@ -78,6 +81,10 @@ pub struct TimedSample {
     pub tick: u32,
 }
 
+/// We target keeping the buffer full with two frames of audio. This introduces a frame of audio
+/// latency but reduces the chance of not having audio ready when requested.
+const TARGET_BUFFERED_FRAMES: u64 = 2;
+
 struct BufferedSource {
     /// Whether the next sample is for the left channel (true) or right channel (false)
     is_next_sample_left: bool,
@@ -89,11 +96,11 @@ struct BufferedSource {
     /// The current sample
     current_sample: TimedSample,
 
-    /// Samples for the current frame
-    current_frame_samples: VecDeque<TimedSample>,
+    /// Buffer of completed frames ready for playback
+    frame_buffer: VecDeque<AudioFrame>,
 
-    /// Queue of pending frames
-    pending_frames: VecDeque<VecDeque<TimedSample>>,
+    /// Queue of pending frames that have been received but not yet processed
+    pending_frames: VecDeque<AudioFrame>,
 
     /// Index of the next sample to read
     next_sample_index: usize,
@@ -103,6 +110,9 @@ struct BufferedSource {
 
     /// Whether the audio stream is currently paused
     is_paused: bool,
+
+    /// The frame number for the frame currently being played
+    frame_number: u64,
 }
 
 impl BufferedSource {
@@ -115,11 +125,12 @@ impl BufferedSource {
                 right: 0.0,
                 tick: 0,
             },
-            current_frame_samples: VecDeque::new(),
+            frame_buffer: VecDeque::new(),
             pending_frames: VecDeque::new(),
             next_sample_index: 0,
             receiver,
             is_paused: false,
+            frame_number: 0,
         }
     }
 
@@ -164,52 +175,42 @@ impl Iterator for BufferedSource {
             return Some(0.0);
         }
 
-        // First check if we should skip to the next frame. Make sure not to skip if between left
-        // and right samples.
+        // Check if frame is complete. Make sure not to skip if between left and right samples.
         if self.is_next_sample_left && self.current_tick >= (TICKS_PER_FRAME as f64 - 0.1) {
+            // Frame is done, start a new frame
+            self.frame_number += 1;
             self.current_tick = 0.0;
             self.next_sample_index = 0;
 
-            // Collect all pending frames to be combined into a single frame
-            let mut next_frames = vec![];
-            while let Some(frame_samples) = self.pending_frames.pop_front() {
-                next_frames.push(frame_samples);
+            // Move on to the next frame of samples if one exists. Otherwise loop current frame.
+            if self.frame_buffer.len() > 1 || self.pending_frames.len() > 0 {
+                self.frame_buffer.pop_front();
             }
 
-            let num_frames = next_frames.len();
-
-            match num_frames {
-                // No new frame available so loop the last full frame
-                0 => {}
-                // One new frame available, use it directly
-                1 => {
-                    self.current_frame_samples = next_frames.remove(0);
-                }
-                // Multiple new frames available, speed them up to fit into one frame
-                _ => {
-                    // Round up integer division to ensure we fill the entire new frame
-                    let frame_length = next_frames[0].len();
-                    let samples_per_frame = (frame_length + num_frames - 1) / num_frames;
-
-                    let mut new_frame = VecDeque::with_capacity(frame_length);
-
-                    // Choose samples evenly from each frame to fill the new frame
-                    for i in 0..frame_length {
-                        let frame_index = i / samples_per_frame;
-                        let frame = &next_frames[frame_index];
-                        let sample_index =
-                            ((i % samples_per_frame) * num_frames).min(frame.len() - 1);
-                        new_frame.push_back(frame[sample_index]);
+            if self.frame_number >= TARGET_BUFFERED_FRAMES {
+                // Fill buffer up to target number of frames
+                for _ in self.frame_buffer.len()..(TARGET_BUFFERED_FRAMES as usize) {
+                    if let Some(frame) = self.pending_frames.pop_front() {
+                        self.frame_buffer.push_back(frame);
                     }
+                }
 
-                    self.current_frame_samples = new_frame;
+                // Combine all pending frames into a single frame if there are multiple.
+                if self.pending_frames.len() > 1 {
+                    let merged_frame = merge_into_single_frame(&self.pending_frames);
+
+                    self.pending_frames.clear();
+                    self.pending_frames.push_back(merged_frame);
                 }
             }
         }
 
         // Find the next sample for the current tick. Remain at the last sample if we reach the end
         // end of the sample buffer.
-        while let Some(sample) = self.current_frame_samples.get(self.next_sample_index)
+        while let Some(sample) = self
+            .frame_buffer
+            .get(0)
+            .and_then(|f| f.get(self.next_sample_index))
             && (sample.tick as f64) <= self.current_tick
         {
             self.current_sample = *sample;
@@ -230,6 +231,24 @@ impl Iterator for BufferedSource {
             Some(self.current_sample.right)
         }
     }
+}
+
+fn merge_into_single_frame(frames: &VecDeque<AudioFrame>) -> AudioFrame {
+    // Round up integer division to ensure we fill the entire new frame
+    let frame_length = frames[0].len();
+    let samples_per_frame = (frame_length + frames.len() - 1) / frames.len();
+
+    let mut new_frame = Vec::with_capacity(frame_length);
+
+    // Choose samples evenly from each frame to fill the new frame
+    for i in 0..frame_length {
+        let frame_index = i / samples_per_frame;
+        let frame = &frames[frame_index];
+        let sample_index = ((i % samples_per_frame) * frames.len()).min(frame.len() - 1);
+        new_frame.push(frame[sample_index]);
+    }
+
+    new_frame
 }
 
 pub struct DefaultSystemAudioOutput {
@@ -256,7 +275,7 @@ impl DefaultSystemAudioOutput {
 }
 
 impl AudioOutput for DefaultSystemAudioOutput {
-    fn send_frame(&self, samples: VecDeque<TimedSample>) {
+    fn send_frame(&self, samples: AudioFrame) {
         self.sender.send_frame(samples);
     }
 
