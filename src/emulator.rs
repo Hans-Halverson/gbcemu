@@ -164,6 +164,12 @@ const NUM_VIRTUAL_SCANLINES: usize = 154;
 
 pub const TICKS_PER_FRAME: usize = 70224;
 
+pub const TICKS_PER_SECOND: f64 = TICKS_PER_FRAME as f64 * REFRESH_RATE;
+
+pub const TICKS_PER_MILLISECOND: f64 = TICKS_PER_SECOND / 1000.0;
+
+pub const TICKS_PER_MILLISECOND_U32: u32 = TICKS_PER_MILLISECOND as u32;
+
 const TICKS_PER_SCANLINE: usize = TICKS_PER_FRAME / NUM_VIRTUAL_SCANLINES;
 
 /// Number of ticks in OAM Scan mode at the beginning of each scanline
@@ -977,7 +983,11 @@ impl Emulator {
     }
 
     fn run_tick(&mut self) {
-        self.handle_commands();
+        // Check commands every millisecond to keep input responsive
+        if self.tick % TICKS_PER_MILLISECOND_U32 == 0 {
+            self.handle_commands();
+        }
+
         self.increment_timers();
 
         let old_tick_number = self.tick;
