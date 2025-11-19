@@ -1014,7 +1014,7 @@ impl Emulator {
         }
 
         // Sample audio if necessary
-        if self.tick % (TICKS_PER_SAMPLE / 10.0) as u32 == 0 {
+        if self.tick % TICKS_PER_SAMPLE as u32 == 0 {
             self.push_next_sample();
         }
 
