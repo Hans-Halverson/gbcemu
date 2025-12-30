@@ -807,10 +807,11 @@ impl Emulator {
                 let frame_start_diff_nanos =
                     frame_start_nanos as i64 - expected_frame_start_nanos as i64;
                 println!(
-                    "[FRAME] Frame start at {}ns, frame {}, {:.2}% through frame",
+                    "[FRAME] Frame start at {}ns, frame {}, {:.2}% through frame ({:.2}% on time)",
                     frame_start_nanos,
                     self.format_frame_number(self.microframe),
-                    frame_start_diff_nanos as f64 / self.ns_per_frame() * 100.0
+                    frame_start_diff_nanos as f64 / self.ns_per_frame() * 100.0,
+                    self.frame_tracker.total_on_time_percent()
                 );
             }
 
@@ -845,15 +846,18 @@ impl Emulator {
 
             if self.options.log_frames {
                 println!(
-                    "[FRAME] Frame end at {}ns, frame {}, {:.2}% of frame budget used",
+                    "[FRAME] Frame end at {}ns, frame {}, {:.2}% of frame budget used, ({:.2}% on time)",
                     current_time_nanos,
                     self.format_frame_number(self.microframe - self.microframes_per_frame()),
-                    ((current_time_nanos - frame_start_nanos) as f64 / self.ns_per_frame()) * 100.0
+                    ((current_time_nanos - frame_start_nanos) as f64 / self.ns_per_frame()) * 100.0,
+                    self.frame_tracker.total_on_time_percent()
                 );
             }
 
             // Schedule the next frame and sleep until then
             if next_frame_time_nanos > current_time_nanos {
+                self.frame_tracker.mark_frame_on_time();
+
                 // Calculate how long to sleep until the next frame
                 let nanos_to_next_frame = next_frame_time_nanos - current_time_nanos;
 
@@ -866,6 +870,8 @@ impl Emulator {
 
             // Skip frames whose expected start time has already passed
             while next_frame_time_nanos <= current_time_nanos {
+                self.frame_tracker.mark_frame_missed();
+
                 if self.options.log_frames {
                     println!(
                         "[FRAME] Missed frame {} by {}ns",

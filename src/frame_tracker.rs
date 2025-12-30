@@ -19,6 +19,12 @@ pub struct FrameTracker {
     /// The frame rate to report for the emulator. This is the frame rate recorded in the last
     /// completed second.
     output_frame_rate: Option<Arc<AtomicU32>>,
+
+    /// Total number of on-time frames since initialization
+    on_time_frames: u64,
+
+    /// Total number of missed frames since initialization
+    missed_frames: u64,
 }
 
 impl FrameTracker {
@@ -28,6 +34,8 @@ impl FrameTracker {
             current_second: 0,
             current_second_frame_count: 0,
             output_frame_rate: None,
+            on_time_frames: 0,
+            missed_frames: 0,
         }
     }
 
@@ -50,6 +58,19 @@ impl FrameTracker {
             self.current_second = second;
             self.current_second_frame_count = 1;
         }
+    }
+
+    pub fn mark_frame_on_time(&mut self) {
+        self.on_time_frames += 1;
+    }
+
+    pub fn mark_frame_missed(&mut self) {
+        self.missed_frames += 1;
+    }
+
+    pub fn total_on_time_percent(&self) -> f64 {
+        let total_frames = self.on_time_frames + self.missed_frames;
+        (self.on_time_frames as f64 / total_frames as f64) * 100.0
     }
 }
 
