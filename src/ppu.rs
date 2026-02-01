@@ -51,7 +51,7 @@ impl Object {
 }
 
 /// Attributes for a background tile (CGB mode only).
-struct BackgroundTileAttributes {
+pub struct BackgroundTileAttributes {
     raw: u8,
 }
 
@@ -183,7 +183,7 @@ impl CgbColor {
 
 const DMG_WHITE_COLOR: Color = Color::Dmg(0);
 
-enum ColorPalette {
+pub enum ColorPalette {
     Dmg(u8),
     Cgb(u64),
 }
@@ -226,15 +226,24 @@ fn background_or_window_color_index(
     let mut tile_map_coordinates =
         window_coordinates.unwrap_or_else(|| background_tile_map_coordinates(emulator, x, y));
 
+    let tile_map_number = if is_window {
+        emulator.lcdc_window_tile_map_number()
+    } else {
+        emulator.lcdc_bg_tile_map_number()
+    };
+
     // Lookup the actual tile in the tile map
-    let tile_index =
-        lookup_tile_in_tile_map(emulator, !is_window, tile_map_coordinates.tile_map_index);
+    let tile_index = lookup_tile_in_tile_map(
+        emulator,
+        tile_map_number,
+        tile_map_coordinates.tile_map_index,
+    );
 
     // In CGB mode tile attributes are stored in a second tile map
     let attributes = if emulator.in_cgb_mode() {
         Some(lookup_tile_attributes_in_tile_map(
             emulator,
-            !is_window,
+            tile_map_number,
             tile_map_coordinates.tile_map_index,
         ))
     } else {
@@ -362,8 +371,14 @@ fn window_tile_map_coordinates(
     Some(tile_map_coordinates(window_x, window_y))
 }
 
+/// Number of pixels in a row or column of a tile
+pub const TILE_SIZE: usize = 8;
+
 /// Number of tiles per row in the tile map.
-const TILE_MAP_WIDTH: usize = 32;
+pub const TILE_MAP_SIZE: usize = 32;
+
+/// Total number of tiles in the tile map.
+pub const TILE_MAP_TOTAL_TILES: usize = TILE_MAP_SIZE * TILE_MAP_SIZE;
 
 /// Convert from coordinates in the 256x256 background or window into the corresponding tile index
 /// and offsets within that tile.
@@ -374,7 +389,7 @@ fn tile_map_coordinates(x: u8, y: u8) -> TileMapCoordinates {
     let x_offset = x % 8;
     let y_offset = y % 8;
 
-    let tile_map_index = tile_map_y as usize * TILE_MAP_WIDTH + tile_map_x as usize;
+    let tile_map_index = tile_map_y as usize * TILE_MAP_SIZE + tile_map_x as usize;
 
     TileMapCoordinates {
         tile_map_index,
@@ -390,19 +405,13 @@ const TILE_MAP_2_ADDRESS: usize = 0x9C00;
 ///
 /// This byte may be interpreted as a tile index or tile attributes depending on context.
 ///
-/// Must specify whether looking up background or window tile map, as they can be different.
-fn lookup_byte_in_tile_map(
+/// Must specify which tile map to use (1 or 2)
+pub fn lookup_byte_in_tile_map(
     emulator: &Emulator,
     vram_bank_num: usize,
-    is_background: bool,
+    tile_map_number: u8,
     tile_map_index: usize,
 ) -> u8 {
-    let tile_map_number = if is_background {
-        emulator.lcdc_bg_tile_map_number()
-    } else {
-        emulator.lcdc_window_tile_map_number()
-    };
-
     let tile_map_base = if tile_map_number == 0 {
         TILE_MAP_1_ADDRESS
     } else {
@@ -417,19 +426,19 @@ fn lookup_byte_in_tile_map(
 }
 
 /// Lookup a tile map index to get the corresponding tile index in the tile data area.
-fn lookup_tile_in_tile_map(emulator: &Emulator, is_background: bool, tile_map_index: usize) -> u8 {
+fn lookup_tile_in_tile_map(emulator: &Emulator, tile_map_number: u8, tile_map_index: usize) -> u8 {
     // Tile index are always in VRAM bank 0
-    lookup_byte_in_tile_map(emulator, 0, is_background, tile_map_index)
+    lookup_byte_in_tile_map(emulator, 0, tile_map_number, tile_map_index)
 }
 
 /// Lookup a tile map index to get the corresponding tile attributes (in CGB mode).
 fn lookup_tile_attributes_in_tile_map(
     emulator: &Emulator,
-    is_background: bool,
+    tile_map_number: u8,
     tile_map_index: usize,
 ) -> BackgroundTileAttributes {
     // Tile attributes are always in VRAM bank 1
-    let raw = lookup_byte_in_tile_map(emulator, 1, is_background, tile_map_index);
+    let raw = lookup_byte_in_tile_map(emulator, 1, tile_map_number, tile_map_index);
     BackgroundTileAttributes { raw }
 }
 
@@ -440,6 +449,30 @@ const TILE_DATA_2_BASE_ADDRESS: usize = 0x9000;
 const OBJECT_TILE_DATA_ADDRESSING_MODE: u8 = 1;
 
 const TILE_DATA_SIZE: usize = 16;
+
+pub fn lookup_all_pixels_in_tile(
+    emulator: &Emulator,
+    vram_bank_num: usize,
+    tile_data_area_addressing_mode: u8,
+    tile_index: u8,
+) -> [[ColorIndex; 8]; 8] {
+    let mut pixels = [[0; 8]; 8];
+
+    for y in 0..8 {
+        for x in 0..8 {
+            pixels[y as usize][x as usize] = lookup_color_index_in_tile(
+                emulator,
+                vram_bank_num,
+                tile_data_area_addressing_mode,
+                tile_index,
+                x,
+                y,
+            );
+        }
+    }
+
+    pixels
+}
 
 /// Lookup the color index at the given pixel offsets within the specified tile.
 ///
@@ -476,7 +509,7 @@ fn lookup_color_index_in_tile(
 }
 
 /// Lookup the 2-bit color for the given color index in a palette.
-fn lookup_color_in_palette(palette: &ColorPalette, color_index: ColorIndex) -> Color {
+pub fn lookup_color_in_palette(palette: &ColorPalette, color_index: ColorIndex) -> Color {
     match palette {
         ColorPalette::Dmg(palette) => {
             // DMG color is a 2-bit value
@@ -495,7 +528,7 @@ fn lookup_cgb_palette(cgb_palletes: &CgbPaletteData, palette_number: usize) -> C
     ColorPalette::Cgb(u64::from_le_bytes(palette_slice.try_into().unwrap()))
 }
 
-fn background_color_palette(
+pub fn background_color_palette(
     emulator: &Emulator,
     attributes: Option<&BackgroundTileAttributes>,
 ) -> ColorPalette {

@@ -2,7 +2,7 @@ use clap::Parser;
 use gbcemu::{
     audio::DefaultSystemAudioOutput,
     cartridge::Cartridge,
-    emulator::{EmulatorBuilder, SharedInputAdapter, SharedOutputBuffer},
+    emulator::{EmulatorBuilder, EmulatorRef, SharedInputAdapter},
     gui::shell::start_emulator_shell_app,
     machine::Machine,
     options::{Args, Options},
@@ -11,7 +11,10 @@ use gbcemu::{
 
 use std::{
     fs,
-    sync::{Arc, mpsc::channel},
+    sync::{
+        Arc,
+        mpsc::{self, channel},
+    },
     thread::{self, JoinHandle},
 };
 
@@ -26,13 +29,11 @@ fn main() {
     let (commands_tx, commands_rx) = channel();
 
     let input_adapter = SharedInputAdapter::new(commands_rx);
-    let output_buffer = SharedOutputBuffer::new();
 
-    let emulator_thread =
-        start_emulator_thread(&args, options.clone(), input_adapter, output_buffer.clone());
+    let (emulator_thread, emulator) = start_emulator_thread(&args, options.clone(), input_adapter);
 
     if !args.headless && !args.dump_rom_info {
-        start_emulator_shell_app(commands_tx, output_buffer);
+        start_emulator_shell_app(emulator, commands_tx);
     } else {
         emulator_thread.join().unwrap();
     }
@@ -42,14 +43,15 @@ fn start_emulator_thread(
     args: &Args,
     options: Arc<Options>,
     input_adapter: SharedInputAdapter,
-    output_buffer: SharedOutputBuffer,
-) -> JoinHandle<()> {
+) -> (JoinHandle<()>, EmulatorRef) {
     let machine = if args.cgb { Machine::Cgb } else { Machine::Dmg };
     let rom_or_save_path = args.rom_or_save.clone();
     let dump_rom_info = args.dump_rom_info;
     let bios_path = args.bios.clone();
 
-    spawn_emulator_thread(move || {
+    let (emulator_send, emulator_recv) = mpsc::channel();
+
+    let join_handle = spawn_emulator_thread(move || {
         let mut emulator_builder = if rom_or_save_path.ends_with(SAVE_FILE_EXTENSION) {
             let save_file_bytes = fs::read(&rom_or_save_path).expect("Failed to read save file");
             let save_file = rmp_serde::from_slice(&save_file_bytes)
@@ -80,7 +82,6 @@ fn start_emulator_thread(
         emulator_builder = emulator_builder
             .with_options(options)
             .with_input_adapter(input_adapter)
-            .with_output_buffer(output_buffer)
             .with_audio_output(Box::new(DefaultSystemAudioOutput::new()));
 
         if let Some(bios_path) = bios_path {
@@ -94,8 +95,14 @@ fn start_emulator_thread(
             return;
         }
 
+        emulator_send.send(emulator.to_ref()).unwrap();
+
         emulator.run();
-    })
+    });
+
+    let emulator_ref = emulator_recv.recv().unwrap();
+
+    (join_handle, emulator_ref)
 }
 
 fn spawn_emulator_thread(f: impl FnOnce() + Send + 'static) -> thread::JoinHandle<()> {

@@ -1,10 +1,4 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
-    time::Instant,
-};
+use std::time::Instant;
 
 pub struct FrameTracker {
     /// Timestamp at the start of tracking, seconds are relative to this
@@ -18,7 +12,7 @@ pub struct FrameTracker {
 
     /// The frame rate to report for the emulator. This is the frame rate recorded in the last
     /// completed second.
-    output_frame_rate: Option<Arc<AtomicU32>>,
+    current_frame_rate: u32,
 
     /// Total number of on-time frames since initialization
     on_time_frames: u64,
@@ -33,15 +27,14 @@ impl FrameTracker {
             base_time: Instant::now(),
             current_second: 0,
             current_second_frame_count: 0,
-            output_frame_rate: None,
+            current_frame_rate: 0,
             on_time_frames: 0,
             missed_frames: 0,
         }
     }
 
-    pub fn init(&mut self, base_time: Instant, output_frame_rate: Option<Arc<AtomicU32>>) {
+    pub fn init(&mut self, base_time: Instant) {
         self.base_time = base_time;
-        self.output_frame_rate = output_frame_rate;
     }
 
     pub fn frame_complete(&mut self) {
@@ -51,10 +44,9 @@ impl FrameTracker {
             self.current_second_frame_count += 1;
         } else {
             // Flush the previous second's count
-            if let Some(output_frame_rate) = &self.output_frame_rate {
-                output_frame_rate.store(self.current_second_frame_count, Ordering::Relaxed);
-            }
+            self.current_frame_rate = self.current_second_frame_count;
 
+            // Start tracking in the new second
             self.current_second = second;
             self.current_second_frame_count = 1;
         }
@@ -71,6 +63,10 @@ impl FrameTracker {
     pub fn total_on_time_percent(&self) -> f64 {
         let total_frames = self.on_time_frames + self.missed_frames;
         (self.on_time_frames as f64 / total_frames as f64) * 100.0
+    }
+
+    pub fn current_frame_rate(&self) -> u32 {
+        self.current_frame_rate
     }
 }
 

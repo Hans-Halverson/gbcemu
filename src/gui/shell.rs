@@ -1,19 +1,20 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
 use eframe::{
-    egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Vec2, ViewportCommand},
+    egui::{self, Align2, Color32, FontId, Key, Pos2, Vec2, ViewportCommand},
     epaint::CornerRadius,
 };
 use muda::Menu;
 
 use crate::{
-    emulator::{Button, Command, SCREEN_HEIGHT, SCREEN_WIDTH, SharedOutputBuffer},
-    gui::menu::create_app_menu,
+    emulator::{Button, Command, Emulator, EmulatorRef, SCREEN_HEIGHT, SCREEN_WIDTH},
+    gui::{menu::create_app_menu, utils::rect_for_coordinate, vram_view::VramViewOptions},
 };
 
+/// Number of screen pixels per emulated pixel by default
 const DEFAULT_SCALE_FACTOR: f32 = 4.0;
 
-pub fn start_emulator_shell_app(commands_tx: Sender<Command>, output_buffer: SharedOutputBuffer) {
+pub fn start_emulator_shell_app(emulator: EmulatorRef, commands_tx: Sender<Command>) {
     eframe::run_native(
         "GBC Emulator",
         eframe::NativeOptions {
@@ -27,7 +28,7 @@ pub fn start_emulator_shell_app(commands_tx: Sender<Command>, output_buffer: Sha
                 .with_title_shown(true),
             ..Default::default()
         },
-        Box::new(|_| Ok(Box::new(EmulatorShellApp::new(commands_tx, output_buffer)))),
+        Box::new(|_| Ok(Box::new(EmulatorShellApp::new(emulator, commands_tx)))),
     )
     .unwrap()
 }
@@ -36,11 +37,11 @@ pub fn start_emulator_shell_app(commands_tx: Sender<Command>, output_buffer: Sha
 const GUI_FPS: f64 = 60.0;
 
 pub struct EmulatorShellApp {
+    /// Reference to the emulator
+    emulator: EmulatorRef,
+
     /// Channel to send commands to the emulator
     commands_tx: Sender<Command>,
-
-    /// Output from the emulator shared across threads
-    shared_output: SharedOutputBuffer,
 
     /// Set of buttons that were pressed last frame
     pressed_buttons: u8,
@@ -51,22 +52,34 @@ pub struct EmulatorShellApp {
     /// Whether the FPS counter should be shown onscreen
     show_fps: bool,
 
+    /// Whether the VRAM view is open
+    is_vram_view_open: bool,
+
+    /// Options for the VRAM view, if open
+    vram_view_options: VramViewOptions,
+
     /// The app menu. Must be kept alive for the menu to function.
     _menu: Menu,
 }
 
 impl EmulatorShellApp {
-    fn new(commands_tx: Sender<Command>, shared_output: SharedOutputBuffer) -> Self {
+    fn new(emulator: EmulatorRef, commands_tx: Sender<Command>) -> Self {
         let menu = create_app_menu();
 
         Self {
+            emulator,
             commands_tx,
-            shared_output,
             pressed_buttons: 0,
             in_turbo_mode: false,
             show_fps: false,
+            is_vram_view_open: false,
+            vram_view_options: VramViewOptions::new(),
             _menu: menu,
         }
+    }
+
+    pub fn emulator(&self) -> &Emulator {
+        &self.emulator
     }
 
     pub fn send_command(&self, command: Command) {
@@ -116,12 +129,20 @@ impl EmulatorShellApp {
 
     fn draw(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.draw_screen(ui);
+            self.draw_emulator_viewport(ui);
 
-            if self.show_fps {
-                self.draw_frame_rate_counter(ui);
+            if self.is_vram_view_open {
+                self.draw_vram_viewport(ui);
             }
         });
+    }
+
+    fn draw_emulator_viewport(&self, ui: &mut egui::Ui) {
+        self.draw_screen(ui);
+
+        if self.show_fps {
+            self.draw_frame_rate_counter(ui);
+        }
     }
 
     fn draw_screen(&self, ui: &mut egui::Ui) {
@@ -130,7 +151,7 @@ impl EmulatorShellApp {
 
         for y in 0..SCREEN_HEIGHT {
             for x in 0..SCREEN_WIDTH {
-                let color = self.shared_output.read_pixel(x, y);
+                let color = self.emulator.read_pixel(x, y);
                 painter.rect_filled(
                     rect_for_coordinate(x, y, scale_factor),
                     CornerRadius::ZERO,
@@ -141,7 +162,7 @@ impl EmulatorShellApp {
     }
 
     fn draw_frame_rate_counter(&self, ui: &mut egui::Ui) {
-        let fps = self.shared_output.frame_rate();
+        let fps = self.emulator.current_frame_rate();
 
         ui.painter().text(
             Pos2::new(4.0, 4.0),
@@ -175,6 +196,26 @@ impl EmulatorShellApp {
     pub fn toggle_show_fps(&mut self) {
         self.show_fps = !self.show_fps;
     }
+
+    pub fn open_vram_view(&mut self) {
+        self.is_vram_view_open = true;
+    }
+
+    pub fn vram_view_options(&self) -> &VramViewOptions {
+        &self.vram_view_options
+    }
+
+    pub fn vram_view_options_mut(&mut self) -> &mut VramViewOptions {
+        &mut self.vram_view_options
+    }
+
+    fn handle_window_close_events(&mut self, ctx: &egui::Context) {
+        ctx.viewport_for(self.vram_viewport_id(), |viewport| {
+            if viewport.input.viewport().close_requested() {
+                self.is_vram_view_open = false;
+            }
+        });
+    }
 }
 
 impl eframe::App for EmulatorShellApp {
@@ -184,16 +225,10 @@ impl eframe::App for EmulatorShellApp {
         self.handle_menu_events(ctx);
         self.handle_pressed_buttons(ctx);
         self.handle_turbo_mode(ctx);
+        self.handle_window_close_events(ctx);
 
         self.draw(ctx);
     }
 }
 
 const FPS_COUNTER_COLOR: Color32 = Color32::from_rgba_unmultiplied_const(0, 0, 255, 128);
-
-fn rect_for_coordinate(x: usize, y: usize, scale_factor: f32) -> Rect {
-    Rect::from_x_y_ranges(
-        ((x as f32) * scale_factor)..=(((x as f32) + 1.0) * scale_factor),
-        ((y as f32) * scale_factor)..=(((y as f32) + 1.0) * scale_factor),
-    )
-}

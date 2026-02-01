@@ -1,10 +1,7 @@
 use std::{
-    array, fs, mem,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-        mpsc::Receiver,
-    },
+    fs, mem,
+    ops::Deref,
+    sync::{Arc, mpsc::Receiver},
     thread,
     time::{Duration, Instant},
 };
@@ -38,51 +35,6 @@ pub const SCREEN_WIDTH: usize = 160;
 
 /// Height of the gameboy screen in pixels
 pub const SCREEN_HEIGHT: usize = 144;
-
-/// A reference to a shared output buffer.
-#[derive(Clone)]
-pub struct SharedOutputBuffer {
-    pixels: Arc<[[AtomicU32; SCREEN_WIDTH]; SCREEN_HEIGHT]>,
-    frame_rate: Arc<AtomicU32>,
-}
-
-impl SharedOutputBuffer {
-    pub fn new() -> Self {
-        let pixels = Arc::new(
-            array::from_fn::<[AtomicU32; SCREEN_WIDTH], SCREEN_HEIGHT, _>(|_| {
-                array::from_fn::<AtomicU32, SCREEN_WIDTH, _>(|_| AtomicU32::new(0xFFFFFFFF))
-            }),
-        );
-
-        let frame_rate = Arc::new(AtomicU32::new(0));
-
-        Self { pixels, frame_rate }
-    }
-
-    pub fn read_pixel(&self, x: usize, y: usize) -> Color32 {
-        let encoded = self.pixels[y][x].load(Ordering::Relaxed);
-
-        let r = (encoded >> 24) as u8;
-        let g = (encoded >> 16) as u8;
-        let b = (encoded >> 8) as u8;
-        let a = encoded as u8;
-
-        Color32::from_rgba_premultiplied(r, g, b, a)
-    }
-
-    pub fn write_pixel(&self, x: usize, y: usize, color: Color32) {
-        let encoded = ((color.r() as u32) << 24)
-            | ((color.g() as u32) << 16)
-            | ((color.b() as u32) << 8)
-            | (color.a() as u32);
-
-        self.pixels[y][x].store(encoded, Ordering::Relaxed);
-    }
-
-    pub fn frame_rate(&self) -> u32 {
-        self.frame_rate.load(Ordering::Relaxed)
-    }
-}
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -333,9 +285,9 @@ pub struct Emulator {
     #[serde(skip)]
     input_adapter: Option<SharedInputAdapter>,
 
-    /// Output buffer for the screen which is shared with the GUI thread
-    #[serde(skip)]
-    output_buffer: Option<SharedOutputBuffer>,
+    /// Current value of each pixel on the screen
+    #[serde(with = "serde_big_array::BigArray")]
+    pixels: [serde_big_array::Array<Color32, SCREEN_WIDTH>; SCREEN_HEIGHT],
 
     /// Sender for audio samples, batched by frame
     #[serde(skip)]
@@ -468,6 +420,23 @@ pub struct Emulator {
     frame_tracker: FrameTracker,
 }
 
+/// An immutable reference to an Emulator. Allows for sharing across threads where we are willing
+/// to read slightly inconsistent data (e.g. for views needed by the GUI and debugger)
+#[derive(Clone, Copy)]
+pub struct EmulatorRef {
+    ptr: *const Emulator,
+}
+
+impl Deref for EmulatorRef {
+    type Target = Emulator;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.ptr }
+    }
+}
+
+unsafe impl Send for EmulatorRef {}
+
 pub struct EmulatorBuilder {
     emulator: Emulator,
 }
@@ -515,11 +484,6 @@ impl EmulatorBuilder {
         self
     }
 
-    pub fn with_output_buffer(mut self, output_buffer: SharedOutputBuffer) -> Self {
-        self.emulator.output_buffer = Some(output_buffer);
-        self
-    }
-
     pub fn with_audio_output(mut self, audio_output: Box<dyn AudioOutput>) -> Self {
         self.emulator.audio_output = Some(audio_output);
         self
@@ -546,7 +510,7 @@ impl Emulator {
             cartridge,
             options: Arc::new(Options::default()),
             input_adapter: None,
-            output_buffer: None,
+            pixels: [serde_big_array::Array([Color32::BLACK; SCREEN_WIDTH]); SCREEN_HEIGHT],
             audio_output: None,
             bios: None,
             save_file: None,
@@ -588,6 +552,12 @@ impl Emulator {
             is_paused: false,
             current_audio_frame: Vec::new(),
             frame_tracker: FrameTracker::new(),
+        }
+    }
+
+    pub fn to_ref(&self) -> EmulatorRef {
+        EmulatorRef {
+            ptr: self as *const Emulator,
         }
     }
 
@@ -751,10 +721,6 @@ impl Emulator {
         self.mode != Mode::Draw || !self.is_lcdc_lcd_enabled()
     }
 
-    pub fn clone_output_buffer(&self) -> Option<SharedOutputBuffer> {
-        self.output_buffer.clone()
-    }
-
     fn ns_per_frame(&self) -> f64 {
         if self.in_turbo_mode {
             NS_PER_MICROFRAME
@@ -784,6 +750,18 @@ impl Emulator {
         }
     }
 
+    pub fn current_frame_rate(&self) -> u32 {
+        self.frame_tracker.current_frame_rate()
+    }
+
+    pub fn read_pixel(&self, x: usize, y: usize) -> Color32 {
+        self.pixels[y][x]
+    }
+
+    pub fn write_pixel(&mut self, x: usize, y: usize, color: Color32) {
+        self.pixels[y][x] = color
+    }
+
     /// Run the emulator at the GameBoy's native framerate
     pub fn run(&mut self) {
         // Execute the BIOS if one was provided, otherwise start directly at the cartridge entry
@@ -797,8 +775,7 @@ impl Emulator {
         let start_time = Instant::now();
         let mut last_save_file_flush_time = start_time;
 
-        let output_frame_rate = self.output_buffer.as_ref().map(|o| o.frame_rate.clone());
-        self.frame_tracker.init(start_time, output_frame_rate);
+        self.frame_tracker.init(start_time);
 
         loop {
             let frame_start_nanos = duration_to_nanos(Instant::now().duration_since(start_time));
@@ -1120,10 +1097,6 @@ impl Emulator {
             emulator_builder = emulator_builder.with_input_adapter(input_adapter);
         }
 
-        if let Some(output_buffer) = self.output_buffer.take() {
-            emulator_builder = emulator_builder.with_output_buffer(output_buffer);
-        }
-
         if let Some(audio_output) = self.audio_output.take() {
             emulator_builder = emulator_builder.with_audio_output(audio_output);
         }
@@ -1218,28 +1191,8 @@ impl Emulator {
         (color << 3) | (color >> 2)
     }
 
-    pub fn write_color(&self, x: u8, y: u8, color: Color) {
-        if let Some(output_buffer) = &self.output_buffer {
-            let color32 = match color {
-                // Look up 2-bit color in screen palette
-                Color::Dmg(color) => SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
-                // Convert from 5-bit RGB to 8-bit RGB by shifting
-                Color::Cgb(color) => {
-                    let red = color.red() as u8;
-                    let green = color.green() as u8;
-                    let blue = color.blue() as u8;
-
-                    // Copy upper 3 bits to lower bits to most regularly distribute the color range
-                    Color32::from_rgb(
-                        Self::map_5_bit_color_to_8_bit(red),
-                        Self::map_5_bit_color_to_8_bit(green),
-                        Self::map_5_bit_color_to_8_bit(blue),
-                    )
-                }
-            };
-
-            output_buffer.write_pixel(x as usize, y as usize, color32);
-        }
+    pub fn write_color(&mut self, x: u8, y: u8, color: Color) {
+        self.write_pixel(x as usize, y as usize, to_output_color(color));
     }
 
     /// Read a byte from the given virtual address.
@@ -1726,4 +1679,24 @@ pub fn duration_to_nanos(duration: Duration) -> u64 {
     let seconds = duration.as_secs();
     let subsec_nanos = duration.subsec_nanos() as u64;
     seconds * 1_000_000_000 + subsec_nanos
+}
+
+pub fn to_output_color(color: Color) -> Color32 {
+    match color {
+        // Look up 2-bit color in screen palette
+        Color::Dmg(color) => SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
+        // Convert from 5-bit RGB to 8-bit RGB by shifting
+        Color::Cgb(color) => {
+            let red = color.red() as u8;
+            let green = color.green() as u8;
+            let blue = color.blue() as u8;
+
+            // Copy upper 3 bits to lower bits to most regularly distribute the color range
+            Color32::from_rgb(
+                Emulator::map_5_bit_color_to_8_bit(red),
+                Emulator::map_5_bit_color_to_8_bit(green),
+                Emulator::map_5_bit_color_to_8_bit(blue),
+            )
+        }
+    }
 }

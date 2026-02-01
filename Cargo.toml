@@ -8,7 +8,7 @@ clap = { version = "4.5.49", features = ["derive"] }
 concat-idents = "1.1.5"
 
 # GUI libraries
-eframe = "0.33.0"
+eframe = { version = "0.33.0", features = ["persistence"] }
 muda = "0.17.1"
 
 # Audio libraries
