@@ -21,6 +21,7 @@ const VOLUME_UP_ITEM_ID: &str = "volume_up";
 const VOLUME_DOWN_ITEM_ID: &str = "volume_down";
 const TOGGLE_HPF_ITEM_ID: &str = "toggle_hpf";
 const TOGGLE_AUDIO_CHANNEL_ITEM_ID_PREFIX: &str = "toggle_audio_channel_";
+const START_DEBUGGING_ITEM_ID: &str = "start_debugging";
 const OPEN_VRAM_VIEW_ITEM_ID: &str = "open_vram_view";
 const SHOW_FPS_ITEM_ID: &str = "show_fps";
 const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
@@ -40,7 +41,8 @@ impl EmulatorShellApp {
                 VOLUME_DOWN_ITEM_ID => self.send_command(Command::VolumeDown),
                 TOGGLE_HPF_ITEM_ID => self.send_command(Command::ToggleHpf),
                 RESIZE_TO_FIT_ITEM_ID => self.resize_to_fit(ctx),
-                OPEN_VRAM_VIEW_ITEM_ID => self.open_vram_view(),
+                START_DEBUGGING_ITEM_ID => self.show_debugger_view(ctx),
+                OPEN_VRAM_VIEW_ITEM_ID => self.show_vram_view(ctx),
                 SHOW_FPS_ITEM_ID => self.toggle_show_fps(),
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
@@ -203,6 +205,13 @@ fn debug_menu() -> Submenu {
         "Debug",
         true,
         &[
+            &MenuItem::with_id(
+                START_DEBUGGING_ITEM_ID,
+                "Start Debugging",
+                true,
+                Some(Accelerator::new(Some(Modifiers::META), Code::KeyD)),
+            ),
+            &PredefinedMenuItem::separator(),
             &MenuItem::with_id(OPEN_VRAM_VIEW_ITEM_ID, "Open VRAM View", true, None),
             &CheckMenuItem::with_id(SHOW_FPS_ITEM_ID, "Show FPS", true, false, None),
         ],

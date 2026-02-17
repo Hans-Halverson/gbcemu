@@ -46,19 +46,38 @@ enum TileDataAddressingMode {
     Unsigned,
 }
 
-pub struct VramViewOptions {
+pub struct VramViewport {
+    /// Whether the viewport is currently shown
+    is_shown: bool,
+    /// Initial position of the viewport
+    initial_position: Pos2,
     layer: Layer,
     tile_map: Option<TileMap>,
     tile_data_addressing_mode: Option<TileDataAddressingMode>,
 }
 
-impl VramViewOptions {
+impl VramViewport {
     pub fn new() -> Self {
-        VramViewOptions {
+        VramViewport {
+            is_shown: false,
+            initial_position: Pos2::ZERO,
             layer: Layer::Background,
             tile_map: None,
             tile_data_addressing_mode: None,
         }
+    }
+
+    pub fn is_shown(&self) -> bool {
+        self.is_shown
+    }
+
+    pub fn open(&mut self, initial_position: Pos2) {
+        self.is_shown = true;
+        self.initial_position = initial_position;
+    }
+
+    pub fn close(&mut self) {
+        self.is_shown = false;
     }
 }
 
@@ -67,11 +86,16 @@ impl EmulatorShellApp {
         ViewportId::from_hash_of("vram_viewport_id")
     }
 
+    pub fn vram_viewport_size(&self) -> Vec2 {
+        WINDOW_SIZE
+    }
+
     pub(super) fn draw_vram_viewport(&mut self, ui: &mut egui::Ui) {
         ui.ctx().show_viewport_immediate(
             self.vram_viewport_id(),
             egui::ViewportBuilder::default()
-                .with_inner_size(WINDOW_SIZE)
+                .with_inner_size(self.vram_viewport_size())
+                .with_position(self.vram_view().initial_position)
                 .with_resizable(false)
                 .with_active(true)
                 .with_title("VRAM View"),
@@ -137,7 +161,7 @@ impl EmulatorShellApp {
         self.draw_debugger_vram_border(painter);
 
         // Draw border around the currently selected layer
-        match self.vram_view_options().layer {
+        match self.vram_view().layer {
             Layer::Background => self.draw_background_border(painter),
             Layer::Window => self.draw_window_border(painter),
         }
@@ -297,20 +321,20 @@ impl EmulatorShellApp {
     fn draw_layer_option(&mut self, ui: &mut egui::Ui) {
         ui.label("Layer:");
 
-        let layer = &mut self.vram_view_options_mut().layer;
+        let layer = &mut self.vram_view_mut().layer;
         ui.radio_value(layer, Layer::Background, "Background");
         ui.radio_value(layer, Layer::Window, "Window");
     }
 
     fn current_layer_tile_map_number(&self) -> u8 {
-        match self.vram_view_options().layer {
+        match self.vram_view().layer {
             Layer::Background => self.emulator().lcdc_bg_tile_map_number(),
             Layer::Window => self.emulator().lcdc_window_tile_map_number(),
         }
     }
 
     fn tile_map_number_from_option(&self) -> u8 {
-        match self.vram_view_options().tile_map {
+        match self.vram_view().tile_map {
             None => self.current_layer_tile_map_number(),
             Some(TileMap::One) => 0,
             Some(TileMap::Two) => 1,
@@ -329,7 +353,7 @@ impl EmulatorShellApp {
 
         ui.label("Tile Map:");
 
-        let tile_map = &mut self.vram_view_options_mut().tile_map;
+        let tile_map = &mut self.vram_view_mut().tile_map;
         ui.radio_value(
             tile_map,
             None,
@@ -340,7 +364,7 @@ impl EmulatorShellApp {
     }
 
     fn tile_data_addressing_mode_from_option(&self) -> u8 {
-        match self.vram_view_options().tile_data_addressing_mode {
+        match self.vram_view().tile_data_addressing_mode {
             None => self.emulator().lcdc_bg_window_tile_data_addressing_mode(),
             Some(TileDataAddressingMode::Unsigned) => 0,
             Some(TileDataAddressingMode::Signed) => 1,
@@ -359,7 +383,7 @@ impl EmulatorShellApp {
 
         ui.label("Tile Data Addressing Mode:");
 
-        let addressing_mode = &mut self.vram_view_options_mut().tile_data_addressing_mode;
+        let addressing_mode = &mut self.vram_view_mut().tile_data_addressing_mode;
         ui.radio_value(
             addressing_mode,
             None,

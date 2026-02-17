@@ -1,14 +1,19 @@
 use std::{sync::mpsc::Sender, time::Duration};
 
 use eframe::{
-    egui::{self, Align2, Color32, FontId, Key, Pos2, Vec2, ViewportCommand},
+    egui::{self, Align2, Color32, FontId, Key, Pos2, Vec2, ViewportCommand, style::ScrollStyle},
     epaint::CornerRadius,
 };
 use muda::Menu;
 
 use crate::{
     emulator::{Button, Command, Emulator, EmulatorRef, SCREEN_HEIGHT, SCREEN_WIDTH},
-    gui::{menu::create_app_menu, utils::rect_for_coordinate, vram_view::VramViewOptions},
+    gui::{
+        debugger_view::{DebuggerViewport, WINDOW_INNER_SIZE as DEBUGGER_WINDOW_INNER_SIZE},
+        menu::create_app_menu,
+        utils::rect_for_coordinate,
+        vram_view::VramViewport,
+    },
 };
 
 /// Number of screen pixels per emulated pixel by default
@@ -25,6 +30,7 @@ pub fn start_emulator_shell_app(emulator: EmulatorRef, commands_tx: Sender<Comma
                 ])
                 .with_min_inner_size([SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32])
                 .with_active(true)
+                .with_transparent(true)
                 .with_title_shown(true),
             ..Default::default()
         },
@@ -52,14 +58,17 @@ pub struct EmulatorShellApp {
     /// Whether the FPS counter should be shown onscreen
     show_fps: bool,
 
-    /// Whether the VRAM view is open
-    is_vram_view_open: bool,
+    /// The VRAM viewport state
+    vram_view: VramViewport,
 
-    /// Options for the VRAM view, if open
-    vram_view_options: VramViewOptions,
+    /// The debugger viewport state
+    debugger_view: DebuggerViewport,
 
     /// The app menu. Must be kept alive for the menu to function.
     _menu: Menu,
+
+    /// Whether the app has been initialized
+    is_initialized: bool,
 }
 
 impl EmulatorShellApp {
@@ -72,9 +81,10 @@ impl EmulatorShellApp {
             pressed_buttons: 0,
             in_turbo_mode: false,
             show_fps: false,
-            is_vram_view_open: false,
-            vram_view_options: VramViewOptions::new(),
+            vram_view: VramViewport::new(),
+            debugger_view: DebuggerViewport::new(),
             _menu: menu,
+            is_initialized: false,
         }
     }
 
@@ -84,6 +94,17 @@ impl EmulatorShellApp {
 
     pub fn send_command(&self, command: Command) {
         self.commands_tx.send(command).unwrap();
+    }
+
+    fn init(&mut self, ctx: &egui::Context) {
+        self.is_initialized = true;
+
+        self.init_styles(ctx);
+    }
+
+    fn init_styles(&self, ctx: &egui::Context) {
+        // Floating scrollbars allows for scroll areas to have a constant inner width
+        ctx.style_mut(|s| s.spacing.scroll = ScrollStyle::floating());
     }
 
     fn handle_pressed_buttons(&mut self, ctx: &egui::Context) {
@@ -131,8 +152,12 @@ impl EmulatorShellApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.draw_emulator_viewport(ui);
 
-            if self.is_vram_view_open {
+            if self.vram_view().is_shown() {
                 self.draw_vram_viewport(ui);
+            }
+
+            if self.debugger_view().is_shown() {
+                self.draw_debugger_viewport(ui);
             }
         });
     }
@@ -197,29 +222,92 @@ impl EmulatorShellApp {
         self.show_fps = !self.show_fps;
     }
 
-    pub fn open_vram_view(&mut self) {
-        self.is_vram_view_open = true;
+    pub fn show_debugger_view(&mut self, ctx: &egui::Context) {
+        if self.debugger_view().is_shown() {
+            return;
+        }
+
+        let initial_position =
+            self.additional_viewport_initial_position(ctx, DEBUGGER_WINDOW_INNER_SIZE);
+        self.debugger_view_mut().open(initial_position);
     }
 
-    pub fn vram_view_options(&self) -> &VramViewOptions {
-        &self.vram_view_options
+    pub fn show_vram_view(&mut self, ctx: &egui::Context) {
+        if self.vram_view().is_shown() {
+            return;
+        }
+
+        let initial_position =
+            self.additional_viewport_initial_position(ctx, self.vram_viewport_size());
+        self.vram_view_mut().open(initial_position);
     }
 
-    pub fn vram_view_options_mut(&mut self) -> &mut VramViewOptions {
-        &mut self.vram_view_options
+    pub fn vram_view(&self) -> &VramViewport {
+        &self.vram_view
+    }
+
+    pub fn vram_view_mut(&mut self) -> &mut VramViewport {
+        &mut self.vram_view
+    }
+
+    pub fn debugger_view(&self) -> &DebuggerViewport {
+        &self.debugger_view
+    }
+
+    pub fn debugger_view_mut(&mut self) -> &mut DebuggerViewport {
+        &mut self.debugger_view
+    }
+
+    /// Outer bounds of the root emulator viewport
+    fn emulator_viewport_outer_rect(&self, ctx: &egui::Context) -> egui::Rect {
+        ctx.viewport_for(egui::ViewportId::ROOT, |viewport| {
+            viewport.input.viewport().outer_rect.unwrap()
+        })
+    }
+
+    /// Initial position for additional viewports (e.g. VRAM view, debugger)
+    ///
+    /// Additional viewports are positioned to the left of the main emulator viewport.
+    pub fn additional_viewport_initial_position(
+        &self,
+        ctx: &egui::Context,
+        viewport_size: Vec2,
+    ) -> Pos2 {
+        const LEFT_MARGIN: f32 = 20.0;
+
+        let root_rect = self.emulator_viewport_outer_rect(ctx);
+
+        Pos2::new(
+            (root_rect.left() - viewport_size.x - LEFT_MARGIN).max(0.0),
+            (root_rect.center().y - (viewport_size.y / 2.0)).max(0.0),
+        )
     }
 
     fn handle_window_close_events(&mut self, ctx: &egui::Context) {
         ctx.viewport_for(self.vram_viewport_id(), |viewport| {
             if viewport.input.viewport().close_requested() {
-                self.is_vram_view_open = false;
+                self.vram_view.close();
+            }
+        });
+
+        ctx.viewport_for(self.debugger_viewport_id(), |viewport| {
+            if viewport.input.viewport().close_requested() {
+                self.debugger_view.close();
             }
         });
     }
 }
 
 impl eframe::App for EmulatorShellApp {
+    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
+        Color32::TRANSPARENT.to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if !self.is_initialized {
+            self.init(ctx);
+        }
+
         ctx.request_repaint_after(Duration::from_secs_f64(1.0 / GUI_FPS));
 
         self.handle_menu_events(ctx);
