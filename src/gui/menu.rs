@@ -9,7 +9,7 @@ use muda::{
 use crate::{
     audio::NUM_AUDIO_CHANNELS,
     emulator::Command,
-    gui::shell::{ColorPalette, EmulatorShellApp},
+    gui::shell::{EmulatorShellApp, ScreenColorPalette},
     save_file::NUM_QUICK_SAVE_SLOTS,
 };
 
@@ -61,10 +61,10 @@ impl EmulatorShellApp {
                 OPEN_VRAM_VIEW_ITEM_ID => self.show_vram_view(ctx),
                 SHOW_FPS_ITEM_ID => self.toggle_show_fps(),
                 COLOR_PALETTE_GRAYSCALE_ITEM_ID => {
-                    self.set_color_palette(ColorPalette::Grayscale);
+                    self.set_color_palette(ScreenColorPalette::Grayscale);
                 }
                 COLOR_PALETTE_GREEN_ITEM_ID => {
-                    self.set_color_palette(ColorPalette::Green);
+                    self.set_color_palette(ScreenColorPalette::Green);
                 }
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
@@ -89,13 +89,13 @@ impl EmulatorShellApp {
         }
     }
 
-    pub(super) fn update_color_palette_menu(&self, color_palette: ColorPalette) {
+    pub(super) fn update_color_palette_menu(&self, scren_palette: ScreenColorPalette) {
         let grayscale_menu_item =
             find_check_menu_item(self.menu(), COLOR_PALETTE_GRAYSCALE_ITEM_ID);
         let green_menu_item = find_check_menu_item(self.menu(), COLOR_PALETTE_GREEN_ITEM_ID);
 
-        grayscale_menu_item.set_checked(matches!(color_palette, ColorPalette::Grayscale));
-        green_menu_item.set_checked(matches!(color_palette, ColorPalette::Green));
+        grayscale_menu_item.set_checked(matches!(scren_palette, ScreenColorPalette::Grayscale));
+        green_menu_item.set_checked(matches!(scren_palette, ScreenColorPalette::Green));
     }
 }
 
