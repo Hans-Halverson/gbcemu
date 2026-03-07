@@ -42,8 +42,16 @@ pub fn run_emulator_for_n_frames(emulator: &mut Emulator, num_frames: usize) {
     }
 }
 
-pub fn resolve_fixture_path(filename: &str) -> PathBuf {
-    Path::new("deps").join("test").join(filename)
+pub fn resolve_fixture_path(path: &str) -> PathBuf {
+    Path::new("deps").join("test").join(path)
+}
+
+pub fn resolve_gameboy_test_roms_path(path: &str) -> PathBuf {
+    resolve_fixture_path("game-boy-test-roms").join(path)
+}
+
+pub fn resolve_blarggs_path(path: &str) -> PathBuf {
+    resolve_gameboy_test_roms_path("blargg").join(path)
 }
 
 pub fn assert_emulator_matches_image(

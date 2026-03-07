@@ -8,20 +8,19 @@ TEST_DEPS_DIR="$ROOT_DIR/deps/test"
 
 mkdir -p "$TEST_DEPS_DIR"
 
-echo "Downloading dmg-acid2 ROM..."
-curl -fsSL -o "$TEST_DEPS_DIR/dmg-acid2.gb" \
-    "https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb"
+GAMEBOY_TEST_ROMS_DIR="$TEST_DEPS_DIR/game-boy-test-roms"
+GAMEBOY_TEST_ROMS_ZIP="$TEST_DEPS_DIR/game-boy-test-roms.zip"
 
-echo "Downloading dmg-acid2 DMG reference image..."
-curl -fsSL -o "$TEST_DEPS_DIR/dmg-acid2-reference-dmg.png" \
-    "https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png"
+if [ ! -d "$GAMEBOY_TEST_ROMS_DIR" ]; then
+    echo "Downloading game-boy-test-roms..."
+    curl -fsSL -o "$GAMEBOY_TEST_ROMS_ZIP" "https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
 
-echo "Downloading cgb-acid2 ROM..."
-curl -fsSL -o "$TEST_DEPS_DIR/cgb-acid2.gb" \
-    "https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc"
+    echo "Unzipping game-boy-test-roms..."
+    unzip -q "$GAMEBOY_TEST_ROMS_ZIP" -d "$GAMEBOY_TEST_ROMS_DIR"
+else
+    echo "game-boy-test-roms already present, skipping."
+fi
 
-echo "Downloading cgb-acid2 reference image..."
-curl -fsSL -o "$TEST_DEPS_DIR/cgb-acid2-reference.png" \
-    "https://raw.githubusercontent.com/mattcurrie/cgb-acid2/master/img/reference.png"
+rm -f "$GAMEBOY_TEST_ROMS_ZIP"
 
 echo "Done."
