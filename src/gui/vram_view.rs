@@ -1,7 +1,7 @@
-use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Vec2, ViewportId};
+use eframe::egui::{self, CornerRadius, Pos2, Rect, Vec2, ViewportId};
 
 use crate::{
-    emulator::{Emulator, SCREEN_HEIGHT, SCREEN_WIDTH},
+    emulator::{SCREEN_HEIGHT, SCREEN_WIDTH},
     gui::shell::{EmulatorShellApp, SCREEN_COLOR_PALETTE_GRAYSCALE},
     ppu::{
         Color, TILE_MAP_SIZE, TILE_MAP_TOTAL_TILES, TILE_SIZE, background_color_palette,
@@ -154,11 +154,7 @@ impl EmulatorShellApp {
 
                     let color32 = match color {
                         Color::Dmg(idx) => SCREEN_COLOR_PALETTE_GRAYSCALE[idx as usize],
-                        Color::Cgb(cgb) => Color32::from_rgb(
-                            Emulator::map_5_bit_color_to_8_bit(cgb.red() as u8),
-                            Emulator::map_5_bit_color_to_8_bit(cgb.green() as u8),
-                            Emulator::map_5_bit_color_to_8_bit(cgb.blue() as u8),
-                        ),
+                        Color::Cgb(cgb) => cgb.to_color32(),
                     };
                     painter.rect_filled(pixel_rect, CornerRadius::ZERO, color32);
                 }

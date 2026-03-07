@@ -143,6 +143,15 @@ pub enum Color {
     Cgb(CgbColor),
 }
 
+impl Color {
+    pub fn unwrap_dmg(&self) -> DmgColor {
+        match self {
+            Color::Dmg(color) => *color,
+            _ => panic!("expected DMG color"),
+        }
+    }
+}
+
 /// A 2-bit color
 ///   0: White
 ///   1: Light gray
@@ -184,11 +193,16 @@ impl CgbColor {
 
     pub fn to_color32(&self) -> Color32 {
         Color32::from_rgb(
-            Emulator::map_5_bit_color_to_8_bit(self.red() as u8),
-            Emulator::map_5_bit_color_to_8_bit(self.green() as u8),
-            Emulator::map_5_bit_color_to_8_bit(self.blue() as u8),
+            map_5_bit_color_to_8_bit(self.red() as u8),
+            map_5_bit_color_to_8_bit(self.green() as u8),
+            map_5_bit_color_to_8_bit(self.blue() as u8),
         )
     }
+}
+
+fn map_5_bit_color_to_8_bit(color: u8) -> u8 {
+    // Copy upper 3 bits to lower bits to most regularly distribute the color range
+    (color << 3) | (color >> 2)
 }
 
 const DMG_WHITE_COLOR: Color = Color::Dmg(0);

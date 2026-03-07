@@ -846,7 +846,7 @@ impl Emulator {
         }
     }
 
-    fn run_frame(&mut self) {
+    pub fn run_frame(&mut self) {
         self.tick = 0;
 
         for i in 0..(NUM_VIRTUAL_SCANLINES as u8) {
@@ -1165,11 +1165,6 @@ impl Emulator {
             save_file.update_cartridge_state(&self.cartridge);
             save_file.flush_to_disk(save_file_path);
         }
-    }
-
-    pub fn map_5_bit_color_to_8_bit(color: u8) -> u8 {
-        // Copy upper 3 bits to lower bits to most regularly distribute the color range
-        (color << 3) | (color >> 2)
     }
 
     pub fn write_color(&mut self, x: u8, y: u8, color: Color) {
@@ -1614,7 +1609,7 @@ impl Emulator {
 
     /// Most initialization is emulated statically by setting the initial state. Perform any dynamic
     /// initialization here.
-    fn emulate_boot_sequence(&mut self) {
+    pub fn emulate_boot_sequence(&mut self) {
         if self.is_cgb_machine() {
             if self.cartridge().is_cgb() {
                 self.write_key0(self.cartridge().cgb_byte());
