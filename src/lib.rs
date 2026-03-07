@@ -9,6 +9,6 @@ mod io_registers;
 pub mod machine;
 mod mbc;
 pub mod options;
-mod ppu;
+pub mod ppu;
 mod registers;
 pub mod save_file;

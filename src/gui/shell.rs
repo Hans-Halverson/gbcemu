@@ -14,7 +14,31 @@ use crate::{
         utils::rect_for_coordinate,
         vram_view::VramViewport,
     },
+    ppu::Color,
 };
+
+/// The color palettes available for DMG (non-CGB) games.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ColorPalette {
+    Grayscale,
+    Green,
+}
+
+/// The default grayscale color palette.
+pub const SCREEN_COLOR_PALETTE_GRAYSCALE: [Color32; 4] = [
+    Color32::from_rgb(0xFF, 0xFF, 0xFF),
+    Color32::from_rgb(0xAA, 0xAA, 0xAA),
+    Color32::from_rgb(0x55, 0x55, 0x55),
+    Color32::from_rgb(0x00, 0x00, 0x00),
+];
+
+/// A green color palette for the original GameBoy screen.
+pub const SCREEN_COLOR_PALETTE_GREEN: [Color32; 4] = [
+    Color32::from_rgb(0x9B, 0xBC, 0x0F),
+    Color32::from_rgb(0x8B, 0xAC, 0x0F),
+    Color32::from_rgb(0x30, 0x62, 0x30),
+    Color32::from_rgb(0x0F, 0x38, 0x0F),
+];
 
 /// Number of screen pixels per emulated pixel by default
 const DEFAULT_SCALE_FACTOR: f32 = 4.0;
@@ -58,6 +82,9 @@ pub struct EmulatorShellApp {
     /// Whether the FPS counter should be shown onscreen
     show_fps: bool,
 
+    /// The active color palette for DMG games
+    color_palette: ColorPalette,
+
     /// The VRAM viewport state
     vram_view: VramViewport,
 
@@ -65,7 +92,7 @@ pub struct EmulatorShellApp {
     debugger_view: DebuggerViewport,
 
     /// The app menu. Must be kept alive for the menu to function.
-    _menu: Menu,
+    menu: Menu,
 
     /// Whether the app has been initialized
     is_initialized: bool,
@@ -81,15 +108,25 @@ impl EmulatorShellApp {
             pressed_buttons: 0,
             in_turbo_mode: false,
             show_fps: false,
+            color_palette: ColorPalette::Grayscale,
             vram_view: VramViewport::new(),
             debugger_view: DebuggerViewport::new(),
-            _menu: menu,
+            menu,
             is_initialized: false,
         }
     }
 
     pub fn emulator(&self) -> &Emulator {
         &self.emulator
+    }
+
+    pub fn set_color_palette(&mut self, color_palette: ColorPalette) {
+        self.color_palette = color_palette;
+        self.update_color_palette_menu(color_palette);
+    }
+
+    pub fn menu(&self) -> &Menu {
+        &self.menu
     }
 
     pub fn send_command(&self, command: Command) {
@@ -173,14 +210,21 @@ impl EmulatorShellApp {
     fn draw_screen(&self, ui: &mut egui::Ui) {
         let scale_factor = self.calculate_scale_factor(ui.ctx());
         let painter = ui.painter();
+        let palette = match self.color_palette {
+            ColorPalette::Grayscale => SCREEN_COLOR_PALETTE_GRAYSCALE,
+            ColorPalette::Green => SCREEN_COLOR_PALETTE_GREEN,
+        };
 
         for y in 0..SCREEN_HEIGHT {
             for x in 0..SCREEN_WIDTH {
-                let color = self.emulator.read_pixel(x, y);
+                let color32 = match self.emulator.read_pixel(x, y) {
+                    Color::Dmg(idx) => palette[idx as usize],
+                    Color::Cgb(cgb) => cgb.to_color32(),
+                };
                 painter.rect_filled(
                     rect_for_coordinate(x, y, scale_factor),
                     CornerRadius::ZERO,
-                    color,
+                    color32,
                 );
             }
         }
