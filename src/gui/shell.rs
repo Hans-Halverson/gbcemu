@@ -19,7 +19,7 @@ use crate::{
 
 /// The color palettes available for DMG (non-CGB) games.
 #[derive(Clone, Copy, PartialEq)]
-pub enum ColorPalette {
+pub enum ScreenColorPalette {
     Grayscale,
     Green,
 }
@@ -82,8 +82,8 @@ pub struct EmulatorShellApp {
     /// Whether the FPS counter should be shown onscreen
     show_fps: bool,
 
-    /// The active color palette for DMG games
-    color_palette: ColorPalette,
+    /// The active color palette for DMG games, translating from 2-bit color indices to RGB values.
+    screen_palette: ScreenColorPalette,
 
     /// The VRAM viewport state
     vram_view: VramViewport,
@@ -108,7 +108,7 @@ impl EmulatorShellApp {
             pressed_buttons: 0,
             in_turbo_mode: false,
             show_fps: false,
-            color_palette: ColorPalette::Grayscale,
+            screen_palette: ScreenColorPalette::Grayscale,
             vram_view: VramViewport::new(),
             debugger_view: DebuggerViewport::new(),
             menu,
@@ -120,9 +120,9 @@ impl EmulatorShellApp {
         &self.emulator
     }
 
-    pub fn set_color_palette(&mut self, color_palette: ColorPalette) {
-        self.color_palette = color_palette;
-        self.update_color_palette_menu(color_palette);
+    pub fn set_color_palette(&mut self, screen_palette: ScreenColorPalette) {
+        self.screen_palette = screen_palette;
+        self.update_color_palette_menu(screen_palette);
     }
 
     pub fn menu(&self) -> &Menu {
@@ -207,20 +207,24 @@ impl EmulatorShellApp {
         }
     }
 
+    pub fn color_to_color32(&self, color: Color) -> Color32 {
+        let palette = match self.screen_palette {
+            ScreenColorPalette::Grayscale => SCREEN_COLOR_PALETTE_GRAYSCALE,
+            ScreenColorPalette::Green => SCREEN_COLOR_PALETTE_GREEN,
+        };
+        match color {
+            Color::Dmg(idx) => palette[idx as usize],
+            Color::Cgb(cgb) => cgb.to_color32(),
+        }
+    }
+
     fn draw_screen(&self, ui: &mut egui::Ui) {
         let scale_factor = self.calculate_scale_factor(ui.ctx());
         let painter = ui.painter();
-        let palette = match self.color_palette {
-            ColorPalette::Grayscale => SCREEN_COLOR_PALETTE_GRAYSCALE,
-            ColorPalette::Green => SCREEN_COLOR_PALETTE_GREEN,
-        };
 
         for y in 0..SCREEN_HEIGHT {
             for x in 0..SCREEN_WIDTH {
-                let color32 = match self.emulator.read_pixel(x, y) {
-                    Color::Dmg(idx) => palette[idx as usize],
-                    Color::Cgb(cgb) => cgb.to_color32(),
-                };
+                let color32 = self.color_to_color32(self.emulator.read_pixel(x, y));
                 painter.rect_filled(
                     rect_for_coordinate(x, y, scale_factor),
                     CornerRadius::ZERO,
