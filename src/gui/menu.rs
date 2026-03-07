@@ -2,15 +2,29 @@ use std::str::FromStr;
 
 use eframe::egui;
 use muda::{
-    CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+    CheckMenuItem, Menu, MenuEvent, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu,
     accelerator::{Accelerator, Code, Modifiers},
 };
 
 use crate::{
-    audio::NUM_AUDIO_CHANNELS, emulator::Command, gui::shell::EmulatorShellApp,
+    audio::NUM_AUDIO_CHANNELS,
+    emulator::Command,
+    gui::shell::{ColorPalette, EmulatorShellApp},
     save_file::NUM_QUICK_SAVE_SLOTS,
 };
 
+// Submenu IDs
+const APP_NAME_SUBMENU_ID: &str = "app_name";
+const EMULATOR_SUBMENU_ID: &str = "emulator";
+const QUICK_SAVE_SUBMENU_ID: &str = "quick_save";
+const LOAD_QUICK_SAVE_SUBMENU_ID: &str = "load_quick_save";
+const COLOR_PALETTE_SUBMENU_ID: &str = "color_palette";
+const AUDIO_SUBMENU_ID: &str = "audio";
+const AUDIO_DEBUG_SUBMENU_ID: &str = "audio_debug";
+const DEBUG_SUBMENU_ID: &str = "debug";
+const WINDOW_SUBMENU_ID: &str = "window";
+
+// Menu item IDs
 const QUIT_ITEM_ID: &str = "quit";
 const PAUSE_ITEM_ID: &str = "pause";
 const SAVE_ITEM_ID: &str = "save";
@@ -25,6 +39,8 @@ const START_DEBUGGING_ITEM_ID: &str = "start_debugging";
 const OPEN_VRAM_VIEW_ITEM_ID: &str = "open_vram_view";
 const SHOW_FPS_ITEM_ID: &str = "show_fps";
 const RESIZE_TO_FIT_ITEM_ID: &str = "resize_to_fit";
+const COLOR_PALETTE_GRAYSCALE_ITEM_ID: &str = "color_palette_grayscale";
+const COLOR_PALETTE_GREEN_ITEM_ID: &str = "color_palette_green";
 
 impl EmulatorShellApp {
     pub(super) fn handle_menu_events(&mut self, ctx: &egui::Context) {
@@ -44,6 +60,12 @@ impl EmulatorShellApp {
                 START_DEBUGGING_ITEM_ID => self.show_debugger_view(ctx),
                 OPEN_VRAM_VIEW_ITEM_ID => self.show_vram_view(ctx),
                 SHOW_FPS_ITEM_ID => self.toggle_show_fps(),
+                COLOR_PALETTE_GRAYSCALE_ITEM_ID => {
+                    self.set_color_palette(ColorPalette::Grayscale);
+                }
+                COLOR_PALETTE_GREEN_ITEM_ID => {
+                    self.set_color_palette(ColorPalette::Green);
+                }
                 _ => {
                     if let Some(slot_number) = item_id.strip_prefix(QUICK_SAVE_ITEM_ID_PREFIX) {
                         let slot = usize::from_str(slot_number).unwrap();
@@ -66,10 +88,20 @@ impl EmulatorShellApp {
             }
         }
     }
+
+    pub(super) fn update_color_palette_menu(&self, color_palette: ColorPalette) {
+        let grayscale_menu_item =
+            find_check_menu_item(self.menu(), COLOR_PALETTE_GRAYSCALE_ITEM_ID);
+        let green_menu_item = find_check_menu_item(self.menu(), COLOR_PALETTE_GREEN_ITEM_ID);
+
+        grayscale_menu_item.set_checked(matches!(color_palette, ColorPalette::Grayscale));
+        green_menu_item.set_checked(matches!(color_palette, ColorPalette::Green));
+    }
 }
 
 fn app_name_menu() -> Submenu {
-    Submenu::with_items(
+    Submenu::with_id_and_items(
+        APP_NAME_SUBMENU_ID,
         "GBC Emulator",
         true,
         &[&MenuItem::with_id(
@@ -83,8 +115,9 @@ fn app_name_menu() -> Submenu {
 }
 
 fn emulator_menu() -> Submenu {
-    let quick_save_submenu = Submenu::new("Quick Save", true);
-    let load_quick_save_submenu = Submenu::new("Load Quick Save", true);
+    let quick_save_submenu = Submenu::with_id(QUICK_SAVE_SUBMENU_ID, "Quick Save", true);
+    let load_quick_save_submenu =
+        Submenu::with_id(LOAD_QUICK_SAVE_SUBMENU_ID, "Load Quick Save", true);
 
     for i in 0..NUM_QUICK_SAVE_SLOTS {
         quick_save_submenu
@@ -112,7 +145,25 @@ fn emulator_menu() -> Submenu {
             .unwrap();
     }
 
-    Submenu::with_items(
+    let color_palette_submenu = Submenu::with_id_and_items(
+        COLOR_PALETTE_SUBMENU_ID,
+        "Color Palette",
+        true,
+        &[
+            &CheckMenuItem::with_id(
+                COLOR_PALETTE_GRAYSCALE_ITEM_ID,
+                "Grayscale",
+                true,
+                true,
+                None,
+            ),
+            &CheckMenuItem::with_id(COLOR_PALETTE_GREEN_ITEM_ID, "Green", true, false, None),
+        ],
+    )
+    .unwrap();
+
+    Submenu::with_id_and_items(
+        EMULATOR_SUBMENU_ID,
         "Emulator",
         true,
         &[
@@ -132,13 +183,15 @@ fn emulator_menu() -> Submenu {
             ),
             &quick_save_submenu,
             &load_quick_save_submenu,
+            &PredefinedMenuItem::separator(),
+            &color_palette_submenu,
         ],
     )
     .unwrap()
 }
 
 fn audio_menu() -> Submenu {
-    let audio_debug_submenu = Submenu::new("Debug", true);
+    let audio_debug_submenu = Submenu::with_id(AUDIO_DEBUG_SUBMENU_ID, "Debug", true);
 
     for i in 0..NUM_AUDIO_CHANNELS {
         let channel = i + 1;
@@ -170,7 +223,8 @@ fn audio_menu() -> Submenu {
         ))
         .unwrap();
 
-    Submenu::with_items(
+    Submenu::with_id_and_items(
+        AUDIO_SUBMENU_ID,
         "Audio",
         true,
         &[
@@ -201,7 +255,8 @@ fn audio_menu() -> Submenu {
 }
 
 fn debug_menu() -> Submenu {
-    Submenu::with_items(
+    Submenu::with_id_and_items(
+        DEBUG_SUBMENU_ID,
         "Debug",
         true,
         &[
@@ -220,7 +275,8 @@ fn debug_menu() -> Submenu {
 }
 
 fn window_menu() -> Submenu {
-    Submenu::with_items(
+    Submenu::with_id_and_items(
+        WINDOW_SUBMENU_ID,
         "Window",
         true,
         &[&MenuItem::with_id(
@@ -233,9 +289,35 @@ fn window_menu() -> Submenu {
     .unwrap()
 }
 
+fn find_menu_item(menu: &Menu, id: &str) -> Option<MenuItemKind> {
+    find_in_items(menu.items(), id)
+}
+
+fn find_check_menu_item(menu: &Menu, id: &str) -> CheckMenuItem {
+    match find_menu_item(menu, id) {
+        Some(MenuItemKind::Check(item)) => item,
+        _ => panic!("CheckMenuItem with id '{}' not found", id),
+    }
+}
+
+/// Recursively search the menu tree for the item with the given ID.
+fn find_in_items(items: Vec<MenuItemKind>, id: &str) -> Option<MenuItemKind> {
+    for item in items {
+        if item.id().as_ref() == id {
+            return Some(item);
+        }
+        if let MenuItemKind::Submenu(ref submenu) = item {
+            if let Some(found) = find_in_items(submenu.items(), id) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
 pub fn create_app_menu() -> Menu {
     let menu = Menu::new();
-
     menu.append(&app_name_menu()).unwrap();
     menu.append(&emulator_menu()).unwrap();
     menu.append(&audio_menu()).unwrap();

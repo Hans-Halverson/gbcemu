@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
@@ -85,24 +84,6 @@ impl SharedInputAdapter {
         Self { commands_rx }
     }
 }
-
-/// The default grayscale color palette.
-const SCREEN_COLOR_PALETTE_GRAYSCALE: [Color32; 4] = [
-    Color32::from_rgb(0xFF, 0xFF, 0xFF),
-    Color32::from_rgb(0xAA, 0xAA, 0xAA),
-    Color32::from_rgb(0x55, 0x55, 0x55),
-    Color32::from_rgb(0x00, 0x00, 0x00),
-];
-
-/// A green color palette for the original GameBoy screen.
-/// TODO: Configure screen color palette via options.
-#[allow(unused)]
-const SCREEN_COLOR_PALETTE_GREEN: [Color32; 4] = [
-    Color32::from_rgb(0x9B, 0xBC, 0x0F),
-    Color32::from_rgb(0x8B, 0xAC, 0x0F),
-    Color32::from_rgb(0x30, 0x62, 0x30),
-    Color32::from_rgb(0x0F, 0x38, 0x0F),
-];
 
 pub type Register = u8;
 
@@ -287,7 +268,7 @@ pub struct Emulator {
 
     /// Current value of each pixel on the screen
     #[serde(with = "serde_big_array::BigArray")]
-    pixels: [serde_big_array::Array<Color32, SCREEN_WIDTH>; SCREEN_HEIGHT],
+    pixels: [serde_big_array::Array<Color, SCREEN_WIDTH>; SCREEN_HEIGHT],
 
     /// Sender for audio samples, batched by frame
     #[serde(skip)]
@@ -510,7 +491,7 @@ impl Emulator {
             cartridge,
             options: Arc::new(Options::default()),
             input_adapter: None,
-            pixels: [serde_big_array::Array([Color32::BLACK; SCREEN_WIDTH]); SCREEN_HEIGHT],
+            pixels: [serde_big_array::Array([Color::Dmg(0); SCREEN_WIDTH]); SCREEN_HEIGHT],
             audio_output: None,
             bios: None,
             save_file: None,
@@ -754,11 +735,11 @@ impl Emulator {
         self.frame_tracker.current_frame_rate()
     }
 
-    pub fn read_pixel(&self, x: usize, y: usize) -> Color32 {
+    pub fn read_pixel(&self, x: usize, y: usize) -> Color {
         self.pixels[y][x]
     }
 
-    pub fn write_pixel(&mut self, x: usize, y: usize, color: Color32) {
+    pub fn write_pixel(&mut self, x: usize, y: usize, color: Color) {
         self.pixels[y][x] = color
     }
 
@@ -1186,13 +1167,13 @@ impl Emulator {
         }
     }
 
-    fn map_5_bit_color_to_8_bit(color: u8) -> u8 {
+    pub fn map_5_bit_color_to_8_bit(color: u8) -> u8 {
         // Copy upper 3 bits to lower bits to most regularly distribute the color range
         (color << 3) | (color >> 2)
     }
 
     pub fn write_color(&mut self, x: u8, y: u8, color: Color) {
-        self.write_pixel(x as usize, y as usize, to_output_color(color));
+        self.write_pixel(x as usize, y as usize, color);
     }
 
     /// Read a byte from the given virtual address.
@@ -1679,24 +1660,4 @@ pub fn duration_to_nanos(duration: Duration) -> u64 {
     let seconds = duration.as_secs();
     let subsec_nanos = duration.subsec_nanos() as u64;
     seconds * 1_000_000_000 + subsec_nanos
-}
-
-pub fn to_output_color(color: Color) -> Color32 {
-    match color {
-        // Look up 2-bit color in screen palette
-        Color::Dmg(color) => SCREEN_COLOR_PALETTE_GRAYSCALE[color as usize],
-        // Convert from 5-bit RGB to 8-bit RGB by shifting
-        Color::Cgb(color) => {
-            let red = color.red() as u8;
-            let green = color.green() as u8;
-            let blue = color.blue() as u8;
-
-            // Copy upper 3 bits to lower bits to most regularly distribute the color range
-            Color32::from_rgb(
-                Emulator::map_5_bit_color_to_8_bit(red),
-                Emulator::map_5_bit_color_to_8_bit(green),
-                Emulator::map_5_bit_color_to_8_bit(blue),
-            )
-        }
-    }
 }

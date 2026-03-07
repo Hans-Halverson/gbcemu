@@ -1,5 +1,6 @@
 use std::{fmt::Debug, mem};
 
+use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
 use crate::emulator::{CgbPaletteData, Emulator, SCREEN_WIDTH};
@@ -136,7 +137,7 @@ fn oam_scan(emulator: &Emulator, scanline: u8) -> Vec<Object> {
     objects
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum Color {
     Dmg(DmgColor),
     Cgb(CgbColor),
@@ -149,6 +150,7 @@ pub enum Color {
 ///   3: Black
 pub type DmgColor = u8;
 
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct CgbColor {
     raw: u16,
 }
@@ -178,6 +180,14 @@ impl CgbColor {
 
     pub fn blue(&self) -> u8 {
         ((self.raw >> 10) & 0x1F) as u8
+    }
+
+    pub fn to_color32(&self) -> Color32 {
+        Color32::from_rgb(
+            Emulator::map_5_bit_color_to_8_bit(self.red() as u8),
+            Emulator::map_5_bit_color_to_8_bit(self.green() as u8),
+            Emulator::map_5_bit_color_to_8_bit(self.blue() as u8),
+        )
     }
 }
 
