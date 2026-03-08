@@ -152,7 +152,6 @@ impl Cartridge {
 
         // Create MBC for this cartridge type
         let mbc_kind = Self::mbc_kind_for_cartridge_type(cartridge_type_byte);
-        let mbc = create_mbc(mbc_kind, rom_size);
 
         // RAM size (1 byte)
         let ram_size_byte = scanner.read_u8();
@@ -166,6 +165,8 @@ impl Cartridge {
             0x05 => 8 * SINGLE_EXTERNAL_RAM_BANK_SIZE,
             _ => panic!("Unsupported RAM size"),
         };
+
+        let mbc = create_mbc(mbc_kind, rom_size, ram_size);
 
         // Treat no MBC as having 8KB of external RAM so that the MBC trait's mappings always map to
         // the cartridge's external RAM (for consistency).
