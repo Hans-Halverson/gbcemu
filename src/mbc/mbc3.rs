@@ -7,7 +7,7 @@ use crate::{
         Address, EXTERNAL_RAM_START, FIRST_ROM_BANK_END, ROM_BANK_SIZE,
         SINGLE_EXTERNAL_RAM_BANK_SIZE,
     },
-    mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
+    mbc::types::{Location, Mbc, MbcKind, RegisterHandle},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -74,9 +74,8 @@ impl Mbc3 {
     fn physical_ram_bank_address(bank_num: usize, addr: Address) -> usize {
         let physical_bank_start_offset = bank_num * SINGLE_EXTERNAL_RAM_BANK_SIZE;
         let offset_in_bank = (addr - EXTERNAL_RAM_START) as usize;
-        let physical_addr = physical_bank_start_offset + offset_in_bank;
 
-        physical_addr
+        physical_bank_start_offset + offset_in_bank
     }
 
     fn map_ram_address(&self, addr: Address) -> Location {
@@ -86,22 +85,22 @@ impl Mbc3 {
 
         match self.ram_rtc_mapping {
             RamRtcMapping::RamBank(bank_num) => {
-                return Location::Address(Self::physical_ram_bank_address(bank_num as usize, addr));
+                Location::Address(Self::physical_ram_bank_address(bank_num as usize, addr))
             }
             RamRtcMapping::RtcRegister(RtcRegister::Seconds) => {
-                return Location::Register(RTC_REGISTER_SECONDS);
+                Location::Register(RTC_REGISTER_SECONDS)
             }
             RamRtcMapping::RtcRegister(RtcRegister::Minutes) => {
-                return Location::Register(RTC_REGISTER_MINUTES);
+                Location::Register(RTC_REGISTER_MINUTES)
             }
             RamRtcMapping::RtcRegister(RtcRegister::Hours) => {
-                return Location::Register(RTC_REGISTER_HOURS);
+                Location::Register(RTC_REGISTER_HOURS)
             }
             RamRtcMapping::RtcRegister(RtcRegister::DayLow) => {
-                return Location::Register(RTC_REGISTER_DAY_LOW);
+                Location::Register(RTC_REGISTER_DAY_LOW)
             }
             RamRtcMapping::RtcRegister(RtcRegister::DayHigh) => {
-                return Location::Register(RTC_REGISTER_DAY_HIGH);
+                Location::Register(RTC_REGISTER_DAY_HIGH)
             }
         }
     }
@@ -117,7 +116,7 @@ impl Mbc for Mbc3 {
         if addr < FIRST_ROM_BANK_END {
             addr as usize
         } else {
-            addr as usize + ((self.rom_bank_num as usize - 1) * ROM_BANK_SIZE as usize)
+            addr as usize + ((self.rom_bank_num as usize - 1) * ROM_BANK_SIZE)
         }
     }
 
@@ -180,8 +179,7 @@ impl Mbc for Mbc3 {
             RTC_REGISTER_DAY_HIGH => {
                 if let Some(time) = &self.latched_clock_time {
                     let days = (time.duration_since(UNIX_EPOCH).unwrap().as_secs() / 86400) as u16;
-                    let day_high = ((days >> 8) & 0x1) as u8;
-                    day_high
+                    ((days >> 8) & 0x1) as u8
                 } else {
                     0
                 }

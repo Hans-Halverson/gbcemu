@@ -22,7 +22,7 @@ use crate::{
     frame_tracker::FrameTracker,
     io_registers::IoRegisters,
     machine::Machine,
-    mbc::mbc::Location,
+    mbc::types::Location,
     options::Options,
     ppu::{Color, WindowLineCounter, draw_scanline},
     registers::Registers,
@@ -946,7 +946,7 @@ impl Emulator {
 
     fn run_tick(&mut self) {
         // Check commands every millisecond to keep input responsive
-        if self.tick % TICKS_PER_MILLISECOND_U32 == 0 {
+        if self.tick.is_multiple_of(TICKS_PER_MILLISECOND_U32) {
             self.handle_commands();
         }
 
@@ -978,7 +978,7 @@ impl Emulator {
         }
 
         // Sample audio if necessary
-        if self.tick % TICKS_PER_SAMPLE as u32 == 0 {
+        if self.tick.is_multiple_of(TICKS_PER_SAMPLE as u32) {
             self.push_next_sample();
         }
 
@@ -1265,7 +1265,7 @@ impl Emulator {
     fn is_bios_addr(&self, addr: Address) -> bool {
         if self.is_cgb_machine() {
             // The range from 0x100-0x200 is mapped to cartridge memory, not BIOS
-            addr < CGB_BIOS_END && !(addr >= 0x100 && addr < 0x200)
+            addr < CGB_BIOS_END && !(0x100..0x200).contains(&addr)
         } else {
             addr < DMG_BIOS_END
         }
@@ -1445,8 +1445,8 @@ impl Emulator {
 
         // This means it is not observable so we can perform the entire transfer at once.
         for i in 0..((num_blocks as u16) * VRAM_DMA_TRANSFER_BLOCK_SIZE) {
-            let byte = self.read_address(source_address.wrapping_add(i as u16));
-            self.write_address(dest_address.wrapping_add(i as u16), byte);
+            let byte = self.read_address(source_address.wrapping_add(i));
+            self.write_address(dest_address.wrapping_add(i), byte);
         }
     }
 
@@ -1547,7 +1547,6 @@ impl Emulator {
             if num_blocks_left == 0 {
                 self.current_hblank_vram_dma_transfer = None;
                 self.write_hdma5_raw(0xFF);
-                return;
             }
         } else if let Some(remaining_ticks) = transfer.remaining_ticks_in_current_hblank.as_mut() {
             *remaining_ticks -= 1;

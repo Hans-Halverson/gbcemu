@@ -306,10 +306,10 @@ fn find_in_items(items: Vec<MenuItemKind>, id: &str) -> Option<MenuItemKind> {
         if item.id().as_ref() == id {
             return Some(item);
         }
-        if let MenuItemKind::Submenu(ref submenu) = item {
-            if let Some(found) = find_in_items(submenu.items(), id) {
-                return Some(found);
-            }
+        if let MenuItemKind::Submenu(ref submenu) = item
+            && let Some(found) = find_in_items(submenu.items(), id)
+        {
+            return Some(found);
         }
     }
 

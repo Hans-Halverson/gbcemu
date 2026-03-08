@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     address_space::{Address, EXTERNAL_RAM_START},
-    mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
+    mbc::types::{Location, Mbc, MbcKind, RegisterHandle},
 };
 
 #[derive(Serialize, Deserialize)]

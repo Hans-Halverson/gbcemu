@@ -5,7 +5,7 @@ use crate::{
         Address, EXTERNAL_RAM_START, FIRST_ROM_BANK_END, ROM_BANK_SIZE,
         SINGLE_EXTERNAL_RAM_BANK_SIZE,
     },
-    mbc::mbc::{Location, Mbc, MbcKind, RegisterHandle},
+    mbc::types::{Location, Mbc, MbcKind, RegisterHandle},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -72,9 +72,8 @@ impl Mbc1 {
     fn physical_first_rom_bank_address(bank_num: usize, addr: Address) -> usize {
         let physical_bank_start_offset = bank_num * ROM_BANK_SIZE;
         let offset_in_bank = addr as usize;
-        let physical_addr = physical_bank_start_offset + offset_in_bank;
 
-        physical_addr
+        physical_bank_start_offset + offset_in_bank
     }
 
     /// Address expected to be in the range 0x4000-0x8000
@@ -86,9 +85,8 @@ impl Mbc1 {
     fn physical_ram_bank_address(bank_num: usize, addr: Address) -> usize {
         let physical_bank_start_offset = bank_num * SINGLE_EXTERNAL_RAM_BANK_SIZE;
         let offset_in_bank = (addr - EXTERNAL_RAM_START) as usize;
-        let physical_addr = physical_bank_start_offset + offset_in_bank;
 
-        physical_addr
+        physical_bank_start_offset + offset_in_bank
     }
 
     fn map_ram_address(&self, addr: Address) -> Location {

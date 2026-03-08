@@ -1546,7 +1546,6 @@ define_instruction!(
     jr_cc_imm8,
     fn execute(emulator, opcode) {
         let signed_offset = emulator.read_imm8_operand() as i8 as i16;
-        let opcode = opcode;
         let pc = emulator.regs().pc();
 
         if !emulator.is_cc_met(cc_operand(opcode)) {

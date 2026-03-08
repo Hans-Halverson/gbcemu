@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     address_space::{ROM_BANK_SIZE, SINGLE_EXTERNAL_RAM_BANK_SIZE},
-    mbc::mbc::{Mbc, MbcKind, create_mbc},
+    mbc::types::{Mbc, MbcKind, create_mbc},
 };
 
 struct Scanner<'a> {
@@ -205,9 +205,10 @@ impl Cartridge {
     }
 
     fn validate_header_checksum(data: &[u8], checksum: u8) {
+        // Checksum over header bytes 0x0134..=0x014C
         let mut sum: u8 = 0;
-        for i in 0x0134..=0x014C {
-            sum = sum.wrapping_sub(data[i]).wrapping_sub(1);
+        for byte in data.iter().take(0x014C + 1).skip(0x0134) {
+            sum = sum.wrapping_sub(*byte).wrapping_sub(1);
         }
         assert_eq!(sum, checksum, "Header checksum mismatch");
     }

@@ -193,9 +193,9 @@ impl CgbColor {
 
     pub fn to_color32(&self) -> Color32 {
         Color32::from_rgb(
-            map_5_bit_color_to_8_bit(self.red() as u8),
-            map_5_bit_color_to_8_bit(self.green() as u8),
-            map_5_bit_color_to_8_bit(self.blue() as u8),
+            map_5_bit_color_to_8_bit(self.red()),
+            map_5_bit_color_to_8_bit(self.green()),
+            map_5_bit_color_to_8_bit(self.blue()),
         )
     }
 }
