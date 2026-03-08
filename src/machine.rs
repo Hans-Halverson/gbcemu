@@ -13,7 +13,7 @@ pub enum Machine {
 impl Machine {
     pub const fn vram_size(&self) -> usize {
         match self {
-            Machine::Dmg => 1 * SINGLE_VRAM_BANK_SIZE,
+            Machine::Dmg => SINGLE_VRAM_BANK_SIZE,
             Machine::Cgb => 2 * SINGLE_VRAM_BANK_SIZE,
         }
     }

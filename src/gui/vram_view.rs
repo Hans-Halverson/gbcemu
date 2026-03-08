@@ -136,12 +136,13 @@ impl EmulatorShellApp {
             let tile_start_x = (i % TILE_MAP_SIZE) * TILE_SIZE;
             let tile_start_y = (i / TILE_MAP_SIZE) * TILE_SIZE;
 
+            #[allow(clippy::needless_range_loop)]
             for x in 0..TILE_SIZE {
                 for y in 0..TILE_SIZE {
                     let color_index = tile_pixels[y][x];
 
                     let color = lookup_color_in_palette(
-                        &background_color_palette(&self.emulator(), None),
+                        &background_color_palette(self.emulator(), None),
                         color_index,
                     );
 

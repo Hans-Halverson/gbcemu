@@ -32,6 +32,7 @@ pub struct Args {
     pub rom_or_save: String,
 }
 
+#[derive(Default)]
 pub struct Options {
     pub log_frames: bool,
     pub in_test_mode: bool,
@@ -42,15 +43,6 @@ impl Options {
         Options {
             log_frames: args.log_frames,
             in_test_mode: args.test,
-        }
-    }
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Options {
-            log_frames: false,
-            in_test_mode: false,
         }
     }
 }

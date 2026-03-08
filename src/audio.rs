@@ -183,7 +183,7 @@ impl Iterator for BufferedSource {
             self.next_sample_index = 0;
 
             // Move on to the next frame of samples if one exists. Otherwise loop current frame.
-            if self.frame_buffer.len() > 1 || self.pending_frames.len() > 0 {
+            if self.frame_buffer.len() > 1 || !self.pending_frames.is_empty() {
                 self.frame_buffer.pop_front();
             }
 
@@ -209,7 +209,7 @@ impl Iterator for BufferedSource {
         // end of the sample buffer.
         while let Some(sample) = self
             .frame_buffer
-            .get(0)
+            .front()
             .and_then(|f| f.get(self.next_sample_index))
             && (sample.tick as f64) <= self.current_tick
         {
@@ -236,7 +236,7 @@ impl Iterator for BufferedSource {
 fn merge_into_single_frame(frames: &VecDeque<AudioFrame>) -> AudioFrame {
     // Round up integer division to ensure we fill the entire new frame
     let frame_length = frames[0].len();
-    let samples_per_frame = (frame_length + frames.len() - 1) / frames.len();
+    let samples_per_frame = frame_length.div_ceil(frames.len());
 
     let mut new_frame = Vec::with_capacity(frame_length);
 
@@ -263,7 +263,7 @@ impl DefaultSystemAudioOutput {
 
         let output_stream = OutputStreamBuilder::open_default_stream().unwrap();
 
-        let sink = Sink::connect_new(&output_stream.mixer());
+        let sink = Sink::connect_new(output_stream.mixer());
         sink.append(BufferedSource::new(receiver));
 
         Self {
@@ -459,19 +459,19 @@ impl Apu {
 
     pub fn advance_period_timers(&mut self, tick_number: u32) {
         // Pulse channels advance period every 4 ticks
-        if tick_number % 4 == 0 {
+        if tick_number.is_multiple_of(4) {
             self.channel_1.advance_period_timer();
             self.channel_2.advance_period_timer();
         }
 
         // Wave channel advance period every 2 ticks
-        if tick_number % 2 == 0 {
+        if tick_number.is_multiple_of(2) {
             self.channel_3.advance_period_timer();
         }
 
         // Noise channel advance period every 8 ticks, as this is the smallest possible period
         // (when clock divider and shift are both 0).
-        if tick_number % 8 == 0 {
+        if tick_number.is_multiple_of(8) {
             self.channel_4.advance_period_timer();
         }
     }
@@ -1035,7 +1035,7 @@ impl WaveChannel {
         let wave_ram_byte = self.wave_ram[(self.wave_sample_index as usize) / 2];
 
         // High nibble contains sample before low nibble
-        let wave_sample = if self.wave_sample_index % 2 == 0 {
+        let wave_sample = if self.wave_sample_index.is_multiple_of(2) {
             (wave_ram_byte & 0xF0) >> 4
         } else {
             wave_ram_byte & 0x0F

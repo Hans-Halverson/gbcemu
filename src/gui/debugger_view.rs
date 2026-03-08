@@ -308,13 +308,13 @@ impl EmulatorShellApp {
             .cursor_range
             .map(|range| range.as_sorted_char_range().start == 0)
             .unwrap_or(false);
-        if is_cursor_before_prefix {
-            if let Some(mut state) = TextEdit::load_state(ui.ctx(), text_edit_output.response.id) {
-                state
-                    .cursor
-                    .set_char_range(Some(CCursorRange::one(CCursor::new(1))));
-                state.store(ui.ctx(), text_edit_output.response.id);
-            }
+        if is_cursor_before_prefix
+            && let Some(mut state) = TextEdit::load_state(ui.ctx(), text_edit_output.response.id)
+        {
+            state
+                .cursor
+                .set_char_range(Some(CCursorRange::one(CCursor::new(1))));
+            state.store(ui.ctx(), text_edit_output.response.id);
         }
 
         // Lock focus to the input field whenever debugger viewport has focus
@@ -354,20 +354,20 @@ impl EmulatorShellApp {
 
             self.debugger_view_mut().input_history_cursor = Some(input_history_cursor);
             self.navigate_to_history_entry(input_history_cursor);
-        } else if ctx.input(|input| input.key_pressed(Key::ArrowDown)) {
-            if let Some(cursor) = self.debugger_view().input_history_cursor {
-                // If at the bottom of the history, clear the input
-                if cursor == 0 {
-                    self.debugger_view_mut().input_history_cursor = None;
-                    self.debugger_view_mut().current_input = String::new();
-                    return;
-                }
-
-                // Decrement the input history cursor
-                let input_history_cursor = cursor - 1;
-                self.debugger_view_mut().input_history_cursor = Some(input_history_cursor);
-                self.navigate_to_history_entry(input_history_cursor);
+        } else if ctx.input(|input| input.key_pressed(Key::ArrowDown))
+            && let Some(cursor) = self.debugger_view().input_history_cursor
+        {
+            // If at the bottom of the history, clear the input
+            if cursor == 0 {
+                self.debugger_view_mut().input_history_cursor = None;
+                self.debugger_view_mut().current_input = String::new();
+                return;
             }
+
+            // Decrement the input history cursor
+            let input_history_cursor = cursor - 1;
+            self.debugger_view_mut().input_history_cursor = Some(input_history_cursor);
+            self.navigate_to_history_entry(input_history_cursor);
         }
     }
 
@@ -378,8 +378,7 @@ impl EmulatorShellApp {
     }
 
     fn submit_current_line(&mut self) {
-        let mut raw_input_line =
-            std::mem::replace(&mut self.debugger_view_mut().current_input, String::new());
+        let mut raw_input_line = std::mem::take(&mut self.debugger_view_mut().current_input);
 
         // Strip the leading space that is always added
         if raw_input_line.starts_with(' ') {

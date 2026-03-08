@@ -161,11 +161,7 @@ impl Emulator {
         let select_special = !is_bit_set(raw, 5);
         let select_directional = !is_bit_set(raw, 4);
 
-        Self::buttons_to_joypad_reg(
-            self.pressed_buttons() as u8,
-            select_special,
-            select_directional,
-        )
+        Self::buttons_to_joypad_reg(self.pressed_buttons(), select_special, select_directional)
     }
 
     fn read_div_impl(&self, _: Address) -> Register {
@@ -572,7 +568,7 @@ impl Emulator {
         let is_high_bit_set = is_bit_set(value, 7);
 
         // The number of 16 byte chunks to transfer
-        let num_blocks = (value & 0x7F) as u8 + 1;
+        let num_blocks = (value & 0x7F) + 1;
 
         // Writing a bit of 0 during an active DMA transfer terminates it
         if !is_high_bit_set && self.has_active_hblank_vram_dam_transfer() {
