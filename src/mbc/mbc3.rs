@@ -23,6 +23,8 @@ pub struct Mbc3 {
     /// The last value written to the latch clock data register.
     /// Used to detect rising edge from 0x00 to 0x01.
     last_latched_write: Option<u8>,
+    /// Mask to apply to full ROM bank number to ensure it doesn't exceed available banks
+    rom_size_mask: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -41,13 +43,14 @@ enum RamRtcMapping {
 }
 
 impl Mbc3 {
-    pub fn new() -> Self {
+    pub fn new(rom_size: usize) -> Self {
         Mbc3 {
             is_ram_rtc_enabled: false,
             rom_bank_num: 1,
             ram_rtc_mapping: RamRtcMapping::RamBank(0),
             latched_clock_time: None,
             last_latched_write: None,
+            rom_size_mask: ((rom_size / ROM_BANK_SIZE) - 1) as u8,
         }
     }
 }
@@ -193,14 +196,13 @@ impl Mbc for Mbc3 {
             RAM_RTC_ENABLE_REGISTER => {
                 self.is_ram_rtc_enabled = (value & 0xF) == 0xA;
             }
-            // Only 7 bits of the value are used. Enforce that bank number 0 is remapped to 1 when
-            // written.
+            // Enforce that bank number 0 is remapped to 1 when written.
             ROM_BANK_NUMBER_REGISTER => {
-                let mut bank_num = value & 0x7F;
+                let mut bank_num = value;
                 if bank_num == 0 {
                     bank_num = 1;
                 }
-                self.rom_bank_num = bank_num;
+                self.rom_bank_num = bank_num & self.rom_size_mask;
             }
             // Either enable RAM or RTC
             RAM_RTC_MAPPING_REGISTER => {

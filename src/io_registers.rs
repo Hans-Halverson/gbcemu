@@ -883,7 +883,7 @@ define_registers!(
     (
         scy,
         0xFF42,
-        NONE,
+        0x00,
         0x00,
         read_register_raw,
         write_register_raw
@@ -891,17 +891,17 @@ define_registers!(
     (
         scx,
         0xFF43,
-        NONE,
+        0x00,
         0x00,
         read_register_raw,
         write_register_raw
     ),
-    (lyc, 0xFF45, 0x0, 0x00, read_register_raw, write_lyc_impl),
+    (lyc, 0xFF45, 0x00, 0x00, read_register_raw, write_lyc_impl),
     (dma, 0xFF46, 0xFF, 0x00, read_register_raw, write_dma_impl),
     (
         wy,
         0xFF4A,
-        NONE,
+        0x00,
         0x00,
         read_register_raw,
         write_register_raw
@@ -909,7 +909,7 @@ define_registers!(
     (
         wx,
         0xFF4B,
-        NONE,
+        0x00,
         0x00,
         read_register_raw,
         write_register_raw

@@ -41,7 +41,7 @@ pub fn create_mbc(kind: MbcKind, rom_size: usize) -> Box<dyn Mbc> {
     match kind {
         MbcKind::None => Box::new(NoMbc),
         MbcKind::Mbc1 => Box::new(Mbc1::new(rom_size)),
-        MbcKind::Mbc3 => Box::new(Mbc3::new()),
+        MbcKind::Mbc3 => Box::new(Mbc3::new(rom_size)),
     }
 }
 

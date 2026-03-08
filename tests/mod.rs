@@ -1,5 +1,7 @@
 mod utils;
 
+use std::path::Path;
+
 use gbcemu::{emulator::EmulatorBuilder, machine::Machine};
 use utils::{
     assert_emulator_matches_image, read_cartridge_file, read_image_file, resolve_blarggs_path,
@@ -15,65 +17,75 @@ const DMG_GRAYSCALE_PALETTE: [image::Rgb<u8>; 4] = [
     image::Rgb([0x00, 0x00, 0x00]),
 ];
 
-fn run_dmg_acid2_test(machine: Machine, reference_filename: &str) {
-    let rom_path = resolve_gameboy_test_roms_path("dmg-acid2/dmg-acid2.gb");
-    let cartridge = read_cartridge_file(&rom_path);
+fn run_screenshot_test(
+    rom_path: &Path,
+    image_path: &Path,
+    machine: Machine,
+    num_frames_to_run: usize,
+) {
+    let cartridge = read_cartridge_file(rom_path);
     let mut emulator = EmulatorBuilder::new_cartridge(cartridge, machine).build();
 
-    run_emulator_for_n_frames(&mut emulator, 10);
+    run_emulator_for_n_frames(&mut emulator, num_frames_to_run);
 
-    let reference_path = resolve_gameboy_test_roms_path(reference_filename);
-    let expected_image = read_image_file(&reference_path);
+    let expected_image = read_image_file(image_path);
 
     assert_emulator_matches_image(&emulator, &expected_image, DMG_GRAYSCALE_PALETTE);
 }
 
 #[test]
 fn dmg_acid2() {
-    run_dmg_acid2_test(Machine::Dmg, "dmg-acid2/dmg-acid2-dmg.png");
+    run_screenshot_test(
+        &resolve_gameboy_test_roms_path("dmg-acid2/dmg-acid2.gb"),
+        &resolve_gameboy_test_roms_path("dmg-acid2/dmg-acid2-dmg.png"),
+        Machine::Dmg,
+        10,
+    );
 }
 
 #[test]
 fn cgb_acid2() {
-    let rom_path = resolve_gameboy_test_roms_path("cgb-acid2/cgb-acid2.gbc");
-    let cartridge = read_cartridge_file(&rom_path);
-    let mut emulator = EmulatorBuilder::new_cartridge(cartridge, Machine::Cgb).build();
-
-    run_emulator_for_n_frames(&mut emulator, 100);
-
-    let reference_path = resolve_gameboy_test_roms_path("cgb-acid2/cgb-acid2.png");
-    let expected_image = read_image_file(&reference_path);
-
-    assert_emulator_matches_image(&emulator, &expected_image, DMG_GRAYSCALE_PALETTE);
-}
-
-fn run_blargg_test(rom_path_in_repo: &str, expected: &str, max_frames: usize) {
-    let rom_path = resolve_blarggs_path(rom_path_in_repo);
-    let cartridge = read_cartridge_file(&rom_path);
-    let mut emulator = EmulatorBuilder::new_cartridge(cartridge, Machine::Dmg).build();
-
-    run_emulator_for_n_frames(&mut emulator, max_frames);
-
-    let expected_path = resolve_blarggs_path(expected);
-    let expected_image = read_image_file(&expected_path);
-
-    assert_emulator_matches_image(&emulator, &expected_image, DMG_GRAYSCALE_PALETTE);
+    run_screenshot_test(
+        &resolve_gameboy_test_roms_path("cgb-acid2/cgb-acid2.gbc"),
+        &resolve_gameboy_test_roms_path("cgb-acid2/cgb-acid2.png"),
+        Machine::Cgb,
+        100,
+    );
 }
 
 #[test]
 fn blarggs_cpu_instrs() {
-    run_blargg_test(
-        "cpu_instrs/cpu_instrs.gb",
-        "cpu_instrs/cpu_instrs-dmg-cgb.png",
+    run_screenshot_test(
+        &resolve_blarggs_path("cpu_instrs/cpu_instrs.gb"),
+        &resolve_blarggs_path("cpu_instrs/cpu_instrs-dmg-cgb.png"),
+        Machine::Dmg,
         4_000,
     );
 }
 
 #[test]
 fn blarggs_instr_timing() {
-    run_blargg_test(
-        "instr_timing/instr_timing.gb",
-        "instr_timing/instr_timing-dmg-cgb.png",
+    run_screenshot_test(
+        &resolve_blarggs_path("instr_timing/instr_timing.gb"),
+        &resolve_blarggs_path("instr_timing/instr_timing-dmg-cgb.png"),
+        Machine::Dmg,
         100,
+    );
+}
+
+#[test]
+fn mbc3_tester() {
+    run_screenshot_test(
+        &resolve_gameboy_test_roms_path("mbc3-tester/mbc3-tester.gb"),
+        &resolve_gameboy_test_roms_path("mbc3-tester/mbc3-tester-dmg.png"),
+        Machine::Dmg,
+        40,
+    );
+
+    run_screenshot_test(
+        &resolve_gameboy_test_roms_path("mbc3-tester/mbc3-tester.gb"),
+        &resolve_gameboy_test_roms_path("mbc3-tester/mbc3-tester-dmg.png"),
+        Machine::Cgb,
+        40,
     );
 }
