@@ -917,7 +917,7 @@ define_registers!(
     (
         ly,
         0xFF44,
-        0x91,
+        0x00,
         VARIABLE,
         read_ly_impl,
         write_to_read_only_register
