@@ -37,11 +37,11 @@ pub enum MbcKind {
     Mbc3,
 }
 
-pub fn create_mbc(kind: MbcKind, rom_size: usize) -> Box<dyn Mbc> {
+pub fn create_mbc(kind: MbcKind, rom_size: usize, ram_size: usize) -> Box<dyn Mbc> {
     match kind {
         MbcKind::None => Box::new(NoMbc),
         MbcKind::Mbc1 => Box::new(Mbc1::new(rom_size)),
-        MbcKind::Mbc3 => Box::new(Mbc3::new(rom_size)),
+        MbcKind::Mbc3 => Box::new(Mbc3::new(rom_size, ram_size)),
     }
 }
 

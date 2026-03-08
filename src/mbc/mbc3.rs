@@ -25,6 +25,8 @@ pub struct Mbc3 {
     last_latched_write: Option<u8>,
     /// Mask to apply to full ROM bank number to ensure it doesn't exceed available banks
     rom_size_mask: u8,
+    /// Mask to apply to RAM bank number to ensure it doesn't exceed available banks
+    ram_size_mask: u8,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -43,7 +45,7 @@ enum RamRtcMapping {
 }
 
 impl Mbc3 {
-    pub fn new(rom_size: usize) -> Self {
+    pub fn new(rom_size: usize, ram_size: usize) -> Self {
         Mbc3 {
             is_ram_rtc_enabled: false,
             rom_bank_num: 1,
@@ -51,6 +53,7 @@ impl Mbc3 {
             latched_clock_time: None,
             last_latched_write: None,
             rom_size_mask: ((rom_size / ROM_BANK_SIZE) - 1) as u8,
+            ram_size_mask: ((ram_size / SINGLE_EXTERNAL_RAM_BANK_SIZE) - 1) as u8,
         }
     }
 }
@@ -194,18 +197,15 @@ impl Mbc for Mbc3 {
             RAM_RTC_ENABLE_REGISTER => {
                 self.is_ram_rtc_enabled = (value & 0xF) == 0xA;
             }
-            // Enforce that bank number 0 is remapped to 1 when written.
+            // Bank number is masked to actual ROM size. Enforce that bank number 0 is remapped to
+            // 1 when written.
             ROM_BANK_NUMBER_REGISTER => {
-                let mut bank_num = value;
-                if bank_num == 0 {
-                    bank_num = 1;
-                }
-                self.rom_bank_num = bank_num & self.rom_size_mask;
+                self.rom_bank_num = (value & self.rom_size_mask).max(1);
             }
             // Either enable RAM or RTC
             RAM_RTC_MAPPING_REGISTER => {
                 let mapping = match value {
-                    0x0..0x8 => RamRtcMapping::RamBank(value),
+                    0x0..0x8 => RamRtcMapping::RamBank(value & self.ram_size_mask),
                     0x8 => RamRtcMapping::RtcRegister(RtcRegister::Seconds),
                     0x9 => RamRtcMapping::RtcRegister(RtcRegister::Minutes),
                     0xA => RamRtcMapping::RtcRegister(RtcRegister::Hours),
