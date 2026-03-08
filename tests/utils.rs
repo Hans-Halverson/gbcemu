@@ -59,6 +59,8 @@ pub fn assert_emulator_matches_image(
     reference_img: &image::RgbImage,
     palette: [image::Rgb<u8>; 4],
 ) {
+    let mut failure = None;
+
     for y in 0..SCREEN_HEIGHT {
         for x in 0..SCREEN_WIDTH {
             let actual_pixel = match emulator.read_pixel(x, y) {
@@ -67,12 +69,18 @@ pub fn assert_emulator_matches_image(
             };
             let expected_pixel = *reference_img.get_pixel(x as u32, y as u32);
 
-            assert_eq!(
-                actual_pixel, expected_pixel,
-                "pixel mismatch at ({x}, {y}): emulator={:?} reference={:?}",
-                actual_pixel, expected_pixel
-            );
+            if actual_pixel != expected_pixel && failure.is_none() {
+                failure = Some((x, y, actual_pixel, expected_pixel));
+            }
         }
+    }
+
+    if let Some((x, y, actual_pixel, expected_pixel)) = failure {
+        assert_eq!(
+            actual_pixel, expected_pixel,
+            "pixel mismatch at ({x}, {y}): emulator={:?} reference={:?}",
+            actual_pixel, expected_pixel
+        );
     }
 }
 
