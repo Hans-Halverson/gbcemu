@@ -109,8 +109,6 @@ const OAM_SCAN_TICKS: usize = 80;
 /// Number of ticks in Draw mode. In reality this is variable, but we choose the minimum time here.
 const DRAW_TICKS: usize = 172;
 
-const HBLANK_TICKS: usize = TICKS_PER_SCANLINE - OAM_SCAN_TICKS - DRAW_TICKS;
-
 /// Total number of ticks to complete an OAM DMA transfer
 const OAM_DMA_TRANSFER_TICKS: usize = 640;
 
@@ -669,10 +667,6 @@ impl Emulator {
         self.is_double_speed = is_double_speed;
     }
 
-    pub fn tick_number(&self) -> u32 {
-        self.tick
-    }
-
     /// Map from the divider register mask to the corresponding bits of the TAC register
     pub fn tac_bits(&self) -> u8 {
         match self.tac_mask {
@@ -776,9 +770,6 @@ impl Emulator {
             // Run a single frame
             self.run_frame();
 
-            // Push a single audio frame to the audio output, if any
-            self.flush_audio_frame();
-
             // Track frame completion in FPS counter
             self.frame_tracker.frame_complete();
 
@@ -847,53 +838,8 @@ impl Emulator {
     }
 
     pub fn run_frame(&mut self) {
-        self.tick = 0;
-
-        for i in 0..(NUM_VIRTUAL_SCANLINES as u8) {
-            self.run_scanline(i);
-        }
-    }
-
-    fn run_scanline(&mut self, scanline: u8) {
-        self.scanline = scanline;
-
-        // Request interrupt for LYC=LY if necessary
-        if self.is_stat_lyc_interrupt_enabled() && (self.scanline == self.lyc()) {
-            self.request_interrupt(Interrupt::LcdStat);
-        }
-
-        if scanline < SCREEN_HEIGHT as u8 {
-            // Each scanline starts in OAM scan mode
-            self.set_mode(Mode::OamScan);
-            for _ in 0..OAM_SCAN_TICKS {
-                self.run_tick();
-            }
-
-            // Followed by a draw period. We simplify by making this a fixed length and drawing the
-            // entire scanline at once, at the start of the draw period.
-            self.set_mode(Mode::Draw);
-
-            draw_scanline(self, scanline);
-
-            for _ in 0..DRAW_TICKS {
-                self.run_tick();
-            }
-
-            // Finally enter HBlank for the rest of the scanline
-            self.enter_hblank();
-            for _ in 0..HBLANK_TICKS {
-                self.run_tick();
-            }
-        } else {
-            // Enter VBlank at the start of the first scanline after the screen
-            if scanline == SCREEN_HEIGHT as u8 {
-                self.enter_vblank();
-            }
-
-            // VBlank simply ticks along with nothing drawn
-            for _ in 0..TICKS_PER_SCANLINE {
-                self.run_tick();
-            }
+        for _ in 0..TICKS_PER_FRAME {
+            self.run_tick();
         }
     }
 
@@ -950,10 +896,42 @@ impl Emulator {
             self.handle_commands();
         }
 
+        // Start a scanline and perform the necessary mdoe transitions
+        let tick_within_scanline = self.tick % (TICKS_PER_SCANLINE as u32);
+        if tick_within_scanline == 0 {
+            self.scanline = if self.tick == 0 { 0 } else { self.scanline + 1 };
+
+            // Request interrupt for LYC=LY if necessary
+            if self.is_stat_lyc_interrupt_enabled() && (self.scanline == self.lyc()) {
+                self.request_interrupt(Interrupt::LcdStat);
+            }
+
+            // Enter OAM scan at the start of each scanline on screen, otherwise enter VBlank at the
+            // start of the first scanline after the screen.
+            if self.scanline < SCREEN_HEIGHT as u8 {
+                self.set_mode(Mode::OamScan);
+            } else if self.scanline == SCREEN_HEIGHT as u8 {
+                self.enter_vblank();
+            }
+        }
+
+        // Transition to Draw and HBlank modes at the appropriate ticks within each screen scanline
+        if self.scanline < SCREEN_HEIGHT as u8 {
+            if tick_within_scanline == OAM_SCAN_TICKS as u32 {
+                // OAM scan is followed by a draw period. We simplify by making this a fixed length and
+                // drawing the entire scanline at once, at the start of the draw period.
+                self.set_mode(Mode::Draw);
+                draw_scanline(self, self.scanline);
+            } else if tick_within_scanline == (OAM_SCAN_TICKS + DRAW_TICKS) as u32 {
+                // Finally enter HBlank for the rest of the scanline
+                self.enter_hblank();
+            }
+        }
+
         self.increment_timers();
 
-        let old_tick_number = self.tick;
-        self.apu_mut().advance_period_timers(old_tick_number);
+        let tick_number = self.tick;
+        self.apu_mut().advance_period_timers(tick_number);
 
         // Ready for next instruction. Either execute the next instruction or an interrupt handler.
         'handled: {
@@ -982,8 +960,6 @@ impl Emulator {
             self.push_next_sample();
         }
 
-        self.tick += 1;
-
         // CPU runs twice as fast in double speed mode
         if self.is_double_speed() {
             self.ticks_to_next_instruction = self.ticks_to_next_instruction.saturating_sub(2);
@@ -997,6 +973,16 @@ impl Emulator {
         self.advance_general_purpose_vram_dma_transfer_state();
         self.advance_hblank_vram_dma_transfer_state();
         self.advance_speed_switch_state();
+
+        // Increment tick counter, resetting to 0 at the end of the frame
+        self.tick += 1;
+
+        if self.tick == TICKS_PER_FRAME as u32 {
+            self.tick = 0;
+
+            // Push a single audio frame to the audio output, if any
+            self.flush_audio_frame();
+        }
     }
 
     fn handle_commands(&mut self) {
@@ -1645,6 +1631,8 @@ impl Emulator {
             let mut audio_frame = Vec::new();
             mem::swap(&mut audio_frame, &mut self.current_audio_frame);
             audio_output.send_frame(audio_frame);
+        } else {
+            self.current_audio_frame.clear();
         }
     }
 }
