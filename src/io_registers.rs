@@ -507,6 +507,20 @@ impl Emulator {
         unused_bits | interrupt_bits | lyc_bit | mode_bits
     }
 
+    fn write_lcdc_impl(&mut self, _: Address, value: Register) {
+        let was_lcd_enabled = self.is_lcdc_lcd_enabled();
+
+        self.write_lcdc_raw(value);
+
+        let is_lcd_enabled = self.is_lcdc_lcd_enabled();
+
+        if was_lcd_enabled && !is_lcd_enabled {
+            self.disable_lcd();
+        } else if !was_lcd_enabled && is_lcd_enabled {
+            self.enable_lcd();
+        }
+    }
+
     fn write_lyc_impl(&mut self, _: Address, value: Register) {
         self.write_lyc_raw(value);
 
@@ -860,14 +874,7 @@ define_registers!(
         read_register_raw,
         write_wave_ram
     ),
-    (
-        lcdc,
-        0xFF40,
-        0x91,
-        0x91,
-        read_register_raw,
-        write_register_raw
-    ),
+    (lcdc, 0xFF40, 0x91, 0x91, read_register_raw, write_lcdc_impl),
     (
         stat,
         0xFF41,
