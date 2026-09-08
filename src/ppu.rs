@@ -175,7 +175,7 @@ impl Debug for CgbColor {
 }
 
 impl CgbColor {
-    pub fn new(raw: u16) -> Self {
+    pub const fn new(raw: u16) -> Self {
         Self { raw }
     }
 
@@ -205,7 +205,8 @@ fn map_5_bit_color_to_8_bit(color: u8) -> u8 {
     (color << 3) | (color >> 2)
 }
 
-const DMG_WHITE_COLOR: Color = Color::Dmg(0);
+pub const DMG_WHITE_COLOR: Color = Color::Dmg(0);
+pub const CGB_WHITE_COLOR: Color = Color::Cgb(CgbColor::new(0x7FFF));
 
 pub enum ColorPalette {
     Dmg(u8),

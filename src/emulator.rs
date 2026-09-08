@@ -24,7 +24,7 @@ use crate::{
     machine::Machine,
     mbc::types::Location,
     options::Options,
-    ppu::{Color, WindowLineCounter, draw_scanline},
+    ppu::{CGB_WHITE_COLOR, Color, DMG_WHITE_COLOR, WindowLineCounter, draw_scanline},
     registers::Registers,
     save_file::{NUM_QUICK_SAVE_SLOTS, SAVE_FILE_AUTO_FLUSH_INTERVAL_SECS, SaveFile},
 };
@@ -289,6 +289,9 @@ pub struct Emulator {
     /// Current tick (T-cycle) within a frame
     tick: u32,
 
+    /// Current tick (T-cycle) within the frame for the PPU. Only advances while the LCD is enabled.
+    ppu_tick: u32,
+
     /// Current turbo frame number. The microframe number divided by the turbo multiplier is the
     /// frame number in regular mode.
     #[serde(skip)]
@@ -496,6 +499,7 @@ impl Emulator {
             save_file_path: None,
             machine,
             tick: 0,
+            ppu_tick: 0,
             microframe: 0,
             scanline: 0,
             mode: Mode::OamScan,
@@ -896,36 +900,9 @@ impl Emulator {
             self.handle_commands();
         }
 
-        // Start a scanline and perform the necessary mdoe transitions
-        let tick_within_scanline = self.tick % (TICKS_PER_SCANLINE as u32);
-        if tick_within_scanline == 0 {
-            self.scanline = if self.tick == 0 { 0 } else { self.scanline + 1 };
-
-            // Request interrupt for LYC=LY if necessary
-            if self.is_stat_lyc_interrupt_enabled() && (self.scanline == self.lyc()) {
-                self.request_interrupt(Interrupt::LcdStat);
-            }
-
-            // Enter OAM scan at the start of each scanline on screen, otherwise enter VBlank at the
-            // start of the first scanline after the screen.
-            if self.scanline < SCREEN_HEIGHT as u8 {
-                self.set_mode(Mode::OamScan);
-            } else if self.scanline == SCREEN_HEIGHT as u8 {
-                self.enter_vblank();
-            }
-        }
-
-        // Transition to Draw and HBlank modes at the appropriate ticks within each screen scanline
-        if self.scanline < SCREEN_HEIGHT as u8 {
-            if tick_within_scanline == OAM_SCAN_TICKS as u32 {
-                // OAM scan is followed by a draw period. We simplify by making this a fixed length and
-                // drawing the entire scanline at once, at the start of the draw period.
-                self.set_mode(Mode::Draw);
-                draw_scanline(self, self.scanline);
-            } else if tick_within_scanline == (OAM_SCAN_TICKS + DRAW_TICKS) as u32 {
-                // Finally enter HBlank for the rest of the scanline
-                self.enter_hblank();
-            }
+        // The entire PPU is disabled when the LCD is off
+        if self.is_lcdc_lcd_enabled() {
+            self.run_ppu_tick();
         }
 
         self.increment_timers();
@@ -982,6 +959,82 @@ impl Emulator {
 
             // Push a single audio frame to the audio output, if any
             self.flush_audio_frame();
+        }
+    }
+
+    fn run_ppu_tick(&mut self) {
+        // Start a scanline and perform the necessary mode transitions
+        let tick_within_scanline = self.ppu_tick % (TICKS_PER_SCANLINE as u32);
+        if tick_within_scanline == 0 {
+            self.scanline = if self.ppu_tick == 0 {
+                0
+            } else {
+                self.scanline + 1
+            };
+
+            // Request interrupt for LYC=LY if necessary
+            if self.is_stat_lyc_interrupt_enabled() && (self.scanline == self.lyc()) {
+                self.request_interrupt(Interrupt::LcdStat);
+            }
+
+            // Enter OAM scan at the start of each scanline on screen, otherwise enter VBlank at the
+            // start of the first scanline after the screen.
+            if self.scanline < SCREEN_HEIGHT as u8 {
+                self.set_mode(Mode::OamScan);
+            } else if self.scanline == SCREEN_HEIGHT as u8 {
+                self.enter_vblank();
+            }
+        }
+
+        // Transition to Draw and HBlank modes at the appropriate ticks within each screen scanline
+        if self.scanline < SCREEN_HEIGHT as u8 {
+            if tick_within_scanline == OAM_SCAN_TICKS as u32 {
+                // OAM scan is followed by a draw period. We simplify by making this a fixed length and
+                // drawing the entire scanline at once, at the start of the draw period.
+                self.set_mode(Mode::Draw);
+                draw_scanline(self, self.scanline);
+            } else if tick_within_scanline == (OAM_SCAN_TICKS + DRAW_TICKS) as u32 {
+                // Finally enter HBlank for the rest of the scanline
+                self.enter_hblank();
+            }
+        }
+
+        // Advance to the next tick, resetting at the end of the PPU's frame
+        self.ppu_tick += 1;
+
+        if self.ppu_tick == TICKS_PER_FRAME as u32 {
+            self.ppu_tick = 0;
+        }
+    }
+
+    /// Restart the PPU at the beginning of a frame when the LCD is turned back on
+    pub fn enable_lcd(&mut self) {
+        self.ppu_tick = 0;
+        self.scanline = 0;
+        self.window_line_counter.reset();
+        self.mode = Mode::OamScan;
+    }
+
+    /// Stop the PPU when the LCD is turned off
+    pub fn disable_lcd(&mut self) {
+        self.ppu_tick = 0;
+        self.scanline = 0;
+        self.window_line_counter.reset();
+
+        // Set the mode directly without triggering any interrupts
+        self.mode = Mode::HBlank;
+
+        // Clear the screen to white while the display is off
+        let color = if self.in_cgb_mode() {
+            CGB_WHITE_COLOR
+        } else {
+            DMG_WHITE_COLOR
+        };
+
+        for y in 0..SCREEN_HEIGHT {
+            for x in 0..SCREEN_WIDTH {
+                self.write_pixel(x, y, color);
+            }
         }
     }
 
